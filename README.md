@@ -1,8 +1,10 @@
 # Pi Voice
 
-Local speech-to-text for Pi.
+Speech-to-text for Pi — on-device model or OpenAI-compatible remote ASR.
 
 Press a keyboard shortcut, talk, and the resulting transcript will be put directly into your chat.
+
+> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) with the local model kept as a fallback. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
 
 ## Install
 
@@ -92,6 +94,28 @@ export PI_VOICE_FFMPEG_PATH=/path/to/ffmpeg
 The legacy `PI_TRANSCRIBE_FFMPEG_PATH` variable remains supported when `PI_VOICE_FFMPEG_PATH` is not set.
 
 When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance to the agent. The agent should ask before running a package-manager command. Model setup is still explicit: run `/voice-settings` once in the interactive TUI to choose and, after confirmation, download a local model.
+
+## Changelog
+
+### 0.2.0
+
+First release of `@tychenjiajun/pi-voice` — a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) 0.1.0, published independently under the `@tychenjiajun` scope.
+
+**Added — Remote ASR backend**
+
+- Recordings can be transcribed by any OpenAI-compatible chat-completions ASR endpoint via the `input_audio` content block.
+- Configure in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**: base URL, model, and the *name* of an env var holding the API key (the key itself is never stored in settings).
+- Audio is uploaded as a 16 kHz mono WAV base64 data URL. Remote transcription is batch-only (no streaming preview).
+- **Local model fallback:** if a remote request fails (network, quota, HTTP error, or the API key is unset), the full recording is transcribed with the configured local model; the failure is logged to `~/.pi/agent/pi-voice.log`. Aborted/cancelled transcriptions are never retried locally.
+
+**Changed**
+
+- Package name, repository, homepage, and bugs URLs updated to the fork (`tychenjiajun/pi-voice`).
+- Chinese script conversion for remote transcripts mirrors the local backend (applies only when the configured language is Chinese).
+
+### 0.1.0
+
+Upstream `@earendil-works/pi-voice` initial release.
 
 ## Developing & Building Pi Voice
 

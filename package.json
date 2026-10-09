@@ -1,7 +1,7 @@
 {
   "name": "@tychenjiajun/pi-voice",
-  "version": "0.1.0",
-  "description": "Local speech-to-text for Pi",
+  "version": "0.2.0",
+  "description": "Speech-to-text for Pi (local model or OpenAI-compatible remote ASR)",
   "type": "module",
   "license": "MIT",
   "repository": {
