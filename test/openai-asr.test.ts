@@ -65,11 +65,12 @@ test("finishRemoteTranscript trims and applies the Chinese output preference", a
   const simplified = await finishRemoteTranscript("  简体中文  ", options);
   assert.equal(simplified, "簡體中文");
 
-  // Auto-detected language: CJK content still triggers conversion.
-  const auto = await finishRemoteTranscript("简体中文", {
+  // No configured language: no conversion, mirroring the local path which
+  // has no detected language to act on here.
+  const unconfigured = await finishRemoteTranscript("简体中文", {
     chineseOutput: "traditional-taiwan",
   });
-  assert.equal(auto, "簡體中文");
+  assert.equal(unconfigured, "简体中文");
 
   const english = await finishRemoteTranscript("  hello world  ", {});
   assert.equal(english, "hello world");
@@ -149,10 +150,35 @@ test("without a fallback configured, remote errors surface directly", async () =
   await backend.dispose();
 });
 
-test("prepare fails clearly when the API key variable is unset", async () => {
+test("a missing API key degrades to the local model instead of failing prepare", async () => {
+  delete process.env[CONFIG.apiKeyEnv];
+  const fallbackCalls: Float32Array[] = [];
+  const backend = new OpenAIAsrBackend(CONFIG, {
+    createFallback: async () => ({
+      async prepare() {},
+      async transcribe(samples: Float32Array) {
+        fallbackCalls.push(samples);
+        return "local text";
+      },
+      async dispose() {},
+    }),
+  });
+  await backend.prepare();
+  const text = await backend.transcribe(pcm(1));
+  assert.equal(text, "local text");
+  assert.equal(fallbackCalls.length, 1);
+  await backend.dispose();
+});
+
+test("without a fallback, a missing API key surfaces from transcribe", async () => {
   delete process.env[CONFIG.apiKeyEnv];
   const backend = new OpenAIAsrBackend(CONFIG);
-  await assert.rejects(backend.prepare(), new RegExp(`${CONFIG.apiKeyEnv} is not set`));
+  await backend.prepare();
+  await assert.rejects(
+    backend.transcribe(pcm(1)),
+    new RegExp(`${CONFIG.apiKeyEnv} is not set`),
+  );
+  await backend.dispose();
 });
 
 test("startStream is undefined so the service takes the batch path", async () => {

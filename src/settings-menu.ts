@@ -309,7 +309,7 @@ function promptText(
       container.addChild(new Spacer(1));
       container.addChild(
         new Text(
-          `${keys.hint("tui.input.submit", "save")}  ${keys.hint("tui.select.cancel", options.value ? "back" : "cancel")}`,
+          `${keys.hint("tui.input.submit", "save")}  ${keys.hint("tui.select.cancel", "back")}`,
           1,
           0,
         ),
@@ -467,7 +467,7 @@ async function editBackend(
   );
   if (saved && !process.env[apiKeyEnv]) {
     ctx.ui.notify(
-      `${apiKeyEnv} is not set in Pi's environment; remote transcription will fail until it is`,
+      `${apiKeyEnv} is not set in Pi's environment; remote transcription will fall back to the local model until it is set`,
       "warning",
     );
   }

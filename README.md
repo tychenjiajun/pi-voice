@@ -47,7 +47,7 @@ export OPENAI_API_KEY=sk-...
 
 Behavior:
 
-- **Local model stays as fallback.** If a remote request fails (network, quota, HTTP error), the full recording is transcribed with the configured local model instead; the failure is logged to `~/.pi/agent/pi-voice.log`. Aborted/cancelled transcriptions are never retried locally.
+- **Local model stays as fallback.** If a remote request fails (network, quota, HTTP error, or the API key is unset), the full recording is transcribed with the configured local model instead; the failure is logged to `~/.pi/agent/pi-voice.log`. Aborted/cancelled transcriptions are never retried locally.
 - **Batch-only.** Remote transcription happens when recording stops (the ASR request carries the whole clip), so there is no streaming preview.
 - **16 kHz mono WAV** is uploaded as a base64 data URL.
 - Switching back to **Local model** restores the original behavior; the local model is still required either way (it is the fallback and file transcription still needs it).

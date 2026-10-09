@@ -29,7 +29,6 @@ export type AsrTransport = (
 ) => Promise<string>;
 
 const SAMPLE_RATE = CAPTURE_SAMPLE_RATE;
-const CJK = /[㐀-䶿一-鿿豈-﫿]/;
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_RETRIES = 1;
 
@@ -120,18 +119,20 @@ function createOpenAITransport(config: OpenAIAsrSettings): {
   };
 }
 
-/** Trims, then applies the Chinese script preference like the local backend. */
+/**
+ * Trims, then applies the Chinese script preference exactly like the local
+ * backend. The chat-completions response carries no detected language, so
+ * this mirrors the local `finishTranscript` with detectedLanguage = "" —
+ * conversion runs only when the configured language is Chinese.
+ */
 export async function finishRemoteTranscript(
   text: string,
   options: TranscriptionOptions,
 ): Promise<string> {
   const trimmed = text.trim();
-  const configured = options.language ?? "";
-  const chinese = isChineseLanguage(configured)
-    ? true
-    : configured === "" && CJK.test(trimmed);
-  if (!chinese) return trimmed;
-  return convertChineseOutput(trimmed, options.chineseOutput ?? "simplified");
+  return isChineseLanguage(options.language ?? "")
+    ? convertChineseOutput(trimmed, options.chineseOutput ?? "simplified")
+    : trimmed;
 }
 
 export type OpenAIAsrBackendDeps = {
@@ -161,9 +162,10 @@ export class OpenAIAsrBackend {
   }
 
   async prepare(): Promise<void> {
-    if (this.client || this.injected) return;
     if (this.disposed) throw new Error("Remote ASR backend has been disposed");
-    this.client = createOpenAITransport(this.config);
+    // The transport is created lazily in transcribe() so that a missing API
+    // key (or any construction failure) falls back to the local model instead
+    // of failing prepare() and blocking every subsequent transcription.
   }
 
   /** Batch-only: the dictation service drops live chunks and transcribes on stop. */
@@ -180,8 +182,14 @@ export class OpenAIAsrBackend {
     try {
       let transport = this.injected;
       if (!transport) {
-        await this.prepare();
-        transport = this.client!.transport;
+        if (this.disposed) throw new Error("Remote ASR backend has been disposed");
+        // Lazily build the transport inside the try so a missing API key or
+        // any construction failure falls back to the local model. Success is
+        // cached; a failure is not, so a later call retries once the env is
+        // fixed.
+        const client = this.client ?? createOpenAITransport(this.config);
+        this.client = client;
+        transport = client.transport;
       }
       signal?.throwIfAborted();
       const text = await transport(
