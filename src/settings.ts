@@ -18,6 +18,19 @@ export const DEFAULT_MICROPHONE: MicrophoneSetting = { type: "system-default" };
 
 export type ChineseOutput = "simplified" | "traditional-taiwan" | "traditional-hong-kong";
 
+/**
+ * Where recordings are transcribed. `transcribe-cpp` runs a local catalog
+ * model; `openai-asr` uploads to an OpenAI-compatible chat-completions ASR
+ * endpoint (e.g. DashScope `qwen3-asr-flash`). The local catalog model stays
+ * configured in both cases and acts as the fallback when the remote call fails.
+ */
+export type BackendSettings =
+  | { type: "transcribe-cpp" }
+  | { type: "openai-asr"; baseUrl: string; model: string; apiKeyEnv: string };
+
+export const DEFAULT_ASR_API_KEY_ENV = "DASHSCOPE_API_KEY";
+export const DEFAULT_ASR_MODEL = "qwen3-asr-flash";
+
 function defaultChineseOutput(): ChineseOutput {
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const subtags = locale.toLowerCase().split("-");
@@ -31,7 +44,7 @@ export type TranscriptionLanguage = string;
 
 export type TranscribeSettings = {
   version: 1;
-  backend: { type: "transcribe-cpp" };
+  backend: BackendSettings;
   shortcut: string;
   preferredLanguages: string[];
   transcriptionLanguage: TranscriptionLanguage;
@@ -112,9 +125,33 @@ export function transcriptionLanguageForModel(
   return defaultTranscriptionLanguage(model, preferredLanguages);
 }
 
+function validateBackend(value: unknown): BackendSettings | undefined {
+  if (!isObject(value)) return undefined;
+  if (value.type === "transcribe-cpp") return { type: "transcribe-cpp" };
+  if (value.type === "openai-asr") {
+    // Deliberately lenient here: settings are validated on every read, and a
+    // slightly odd base URL should surface as a request error, not as "invalid
+    // settings" that silently drops the whole configuration.
+    if (typeof value.baseUrl !== "string" || !value.baseUrl.trim()) return undefined;
+    if (typeof value.model !== "string" || !value.model.trim()) return undefined;
+    const apiKeyEnv =
+      typeof value.apiKeyEnv === "string" && value.apiKeyEnv.trim()
+        ? value.apiKeyEnv.trim()
+        : DEFAULT_ASR_API_KEY_ENV;
+    return {
+      type: "openai-asr",
+      baseUrl: value.baseUrl.trim(),
+      model: value.model.trim(),
+      apiKeyEnv,
+    };
+  }
+  return undefined;
+}
+
 function validateSettings(value: unknown): TranscribeSettings | undefined {
   if (!isObject(value) || value.version !== SETTINGS_VERSION) return undefined;
-  if (!isObject(value.backend) || value.backend.type !== "transcribe-cpp") return undefined;
+  const backend = validateBackend(value.backend);
+  if (!backend) return undefined;
   const shortcut =
     typeof value.shortcut === "string" ? normalizeShortcut(value.shortcut) : undefined;
   if (!shortcut) return undefined;
@@ -130,7 +167,7 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
 
   return {
     version: SETTINGS_VERSION,
-    backend: { type: "transcribe-cpp" },
+    backend,
     shortcut,
     preferredLanguages,
     transcriptionLanguage: transcriptionLanguageForModel(
@@ -206,6 +243,8 @@ type ModelSettingsOptions = {
   transcriptionLanguage?: TranscriptionLanguage;
   chineseOutput?: ChineseOutput;
   microphone?: MicrophoneSetting;
+  /** Preserved across model re-selection; defaults to the local backend. */
+  backend?: BackendSettings;
 };
 
 export function settingsForModel(
@@ -220,7 +259,7 @@ export function settingsForModel(
   ];
   return {
     version: SETTINGS_VERSION,
-    backend: { type: "transcribe-cpp" },
+    backend: options.backend ?? { type: "transcribe-cpp" },
     shortcut: options.shortcut ?? DEFAULT_SHORTCUT,
     preferredLanguages,
     transcriptionLanguage: transcriptionLanguageForModel(

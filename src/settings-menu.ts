@@ -2,10 +2,11 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, Container, Input, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { microphonePermission, type Permission } from "./audio.js";
 import { displayLanguage, getCatalogModel } from "./catalog.js";
 import { chineseOutputSummary, isChineseLanguage } from "./chinese.js";
+import { VoiceKeys } from "./keybindings.js";
 import {
   chooseLanguages,
   createTranscriptionLanguagePicker,
@@ -18,7 +19,10 @@ import {
 } from "./microphone-picker.js";
 import { runModelSelection } from "./onboarding.js";
 import {
+  DEFAULT_ASR_API_KEY_ENV,
+  DEFAULT_ASR_MODEL,
   writeSettings,
+  type BackendSettings,
   type ChineseOutput,
   type MicrophoneSetting,
   type TranscribeSettings,
@@ -27,7 +31,9 @@ import {
 import { displayShortcut } from "./shortcut-core.js";
 import { createShortcutPicker } from "./shortcuts.js";
 import {
+  LIST_PADDING,
   padToWidth,
+  panelBorder,
   SingleSelectPicker,
   type SingleSelectChoice,
 } from "./ui-components.js";
@@ -41,6 +47,7 @@ const SETTINGS_ROW_OVERHEAD = SETTINGS_LABEL_WIDTH + 6;
 type SettingsAction =
   | "preferred-languages"
   | "model"
+  | "backend"
   | "transcription-language"
   | "chinese-output"
   | "microphone"
@@ -82,6 +89,10 @@ async function saveUpdatedSettings(
   }
 }
 
+function backendSummary(backend: BackendSettings): string {
+  return backend.type === "openai-asr" ? `Remote · ${backend.model}` : "Local model";
+}
+
 function settingsHomeChoices(
   configured: TranscribeSettings,
   permission: Permission,
@@ -99,6 +110,13 @@ function settingsHomeChoices(
       label: "Model",
       summary: model.name,
       description: "Switch between downloaded models, or download a new one",
+    },
+    {
+      value: "backend",
+      label: "Transcription backend",
+      summary: backendSummary(configured.backend),
+      description:
+        "Local model, or an OpenAI-compatible remote ASR endpoint (local model stays as fallback)",
     },
     {
       value: "transcription-language",
@@ -250,6 +268,212 @@ async function chooseShortcut(
   );
 }
 
+/**
+ * Single-field text prompt built on pi-tui's Input. Empty input may be legal
+ * (the caller decides via validate); Escape backs out of the whole flow.
+ */
+function promptText(
+  ctx: ExtensionContext,
+  options: {
+    title: string;
+    description?: string;
+    value: string;
+    placeholder?: string;
+    validate?: (value: string) => string | undefined;
+  },
+): Promise<string | undefined> {
+  return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
+    const keys = new VoiceKeys(keybindings);
+    const input = new Input();
+    input.setValue(options.value);
+    let error: string | undefined;
+    const container = new Container();
+
+    const rebuild = (): void => {
+      container.clear();
+      container.addChild(panelBorder(theme));
+      container.addChild(new Spacer(1));
+      container.addChild(new Text(theme.fg("accent", theme.bold(options.title)), 1, 0));
+      if (options.description) {
+        container.addChild(new Text(theme.fg("muted", options.description), 1, 0));
+      }
+      container.addChild(new Spacer(1));
+      if (error) {
+        container.addChild(new Text(theme.fg("error", error), 1, 0));
+        container.addChild(new Spacer(1));
+      }
+      if (!input.getValue() && options.placeholder) {
+        container.addChild(new Text(theme.fg("dim", options.placeholder), 2, 0));
+      }
+      const inputBox = new Box(LIST_PADDING, 0);
+      inputBox.addChild(input);
+      container.addChild(inputBox);
+      container.addChild(new Spacer(1));
+      container.addChild(
+        new Text(
+          `${keys.hint("tui.input.submit", "save")}  ${keys.hint("tui.select.cancel", options.value ? "back" : "cancel")}`,
+          1,
+          0,
+        ),
+      );
+      container.addChild(new Spacer(1));
+      container.addChild(panelBorder(theme));
+    };
+    rebuild();
+
+    input.onSubmit = (value) => {
+      const problem = options.validate?.(value.trim());
+      if (problem) {
+        error = problem;
+        rebuild();
+        tui.requestRender();
+        return;
+      }
+      done(value.trim());
+    };
+    input.onEscape = () => done(undefined);
+
+    return {
+      get focused() {
+        return input.focused;
+      },
+      set focused(value: boolean) {
+        input.focused = value;
+      },
+      render(width: number): string[] {
+        return container
+          .render(width)
+          .map((line) => truncateToWidth(line, width, ""));
+      },
+      handleInput(data: string): void {
+        input.handleInput(data);
+      },
+      invalidate(): void {
+        container.invalidate();
+      },
+    };
+  });
+}
+
+async function chooseBackendType(
+  ctx: ExtensionContext,
+  current: BackendSettings,
+): Promise<"transcribe-cpp" | "openai-asr" | undefined> {
+  const choices: SingleSelectChoice<"transcribe-cpp" | "openai-asr">[] = [
+    {
+      value: "transcribe-cpp",
+      label: "Local model",
+      description: "Transcribe fully on-device with the downloaded model; works offline",
+    },
+    {
+      value: "openai-asr",
+      label: "Remote ASR (OpenAI-compatible)",
+      description:
+        "Upload audio to a chat-completions ASR endpoint such as DashScope qwen3-asr-flash; falls back to the local model if the request fails",
+    },
+  ];
+  return ctx.ui.custom<"transcribe-cpp" | "openai-asr" | undefined>(
+    (tui, theme, keybindings, done) =>
+      new SingleSelectPicker(
+        tui,
+        theme,
+        keybindings,
+        choices,
+        current.type,
+        { title: "Transcription backend", cancelLabel: "back" },
+        done,
+      ),
+  );
+}
+
+function validateBaseUrl(value: string): string | undefined {
+  if (!value) return "Base URL is required";
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return "Base URL must start with http:// or https://";
+    }
+  } catch {
+    return "Base URL must be a valid URL";
+  }
+  return undefined;
+}
+
+function validateEnvName(value: string): string | undefined {
+  if (!value) return "Environment variable name is required";
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+    return "Use a plain environment variable name, e.g. DASHSCOPE_API_KEY";
+  }
+  return undefined;
+}
+
+/** Backend row flow: pick the type, then collect remote settings step by step. */
+async function editBackend(
+  ctx: ExtensionContext,
+  configured: TranscribeSettings,
+): Promise<boolean> {
+  const type = await chooseBackendType(ctx, configured.backend);
+  if (!type) return false;
+  if (type === "transcribe-cpp") {
+    if (configured.backend.type === "transcribe-cpp") return false;
+    return saveUpdatedSettings(
+      ctx,
+      configured,
+      { ...configured, backend: { type: "transcribe-cpp" } },
+      "Using the local model",
+    );
+  }
+
+  const current =
+    configured.backend.type === "openai-asr" ? configured.backend : undefined;
+  const baseUrl = await promptText(ctx, {
+    title: "ASR base URL",
+    description: "OpenAI-compatible endpoint root, without the /chat/completions path",
+    value: current?.baseUrl ?? "",
+    placeholder: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    validate: validateBaseUrl,
+  });
+  if (baseUrl === undefined) return false;
+
+  const model = await promptText(ctx, {
+    title: "ASR model",
+    value: current?.model ?? DEFAULT_ASR_MODEL,
+    validate: (value) => (value ? undefined : "Model name is required"),
+  });
+  if (model === undefined) return false;
+
+  const apiKeyEnv = await promptText(ctx, {
+    title: "API key environment variable",
+    description: "The key itself is read from this variable at runtime; it is never stored in settings",
+    value: current?.apiKeyEnv ?? DEFAULT_ASR_API_KEY_ENV,
+    validate: validateEnvName,
+  });
+  if (apiKeyEnv === undefined) return false;
+
+  const backend: BackendSettings = { type: "openai-asr", baseUrl, model, apiKeyEnv };
+  if (
+    current &&
+    current.baseUrl === baseUrl &&
+    current.model === model &&
+    current.apiKeyEnv === apiKeyEnv
+  ) {
+    return false;
+  }
+  const saved = await saveUpdatedSettings(
+    ctx,
+    configured,
+    { ...configured, backend },
+    `Remote ASR configured (${model})`,
+  );
+  if (saved && !process.env[apiKeyEnv]) {
+    ctx.ui.notify(
+      `${apiKeyEnv} is not set in Pi's environment; remote transcription will fail until it is`,
+      "warning",
+    );
+  }
+  return saved;
+}
+
 export async function openMacOSMicrophoneSettings(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -324,6 +548,7 @@ export async function showSettingsMenu(
         chineseOutput: configured.chineseOutput,
         currentModelId: configured.model.id,
         microphone: configured.microphone,
+        backend: configured.backend,
         postActivation: "stay",
         onPreferredLanguagesChange: async (preferredLanguages) => {
           if (languagesEqual(preferredLanguages, configured.preferredLanguages)) return;
@@ -334,6 +559,11 @@ export async function showSettingsMenu(
         },
       });
       if (updated) Object.assign(configured, updated);
+      continue;
+    }
+
+    if (action === "backend") {
+      await editBackend(ctx, configured);
       continue;
     }
 

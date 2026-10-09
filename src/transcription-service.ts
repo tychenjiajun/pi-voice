@@ -55,8 +55,18 @@ type ReusableBackend = Pick<
 };
 
 type BackendFactory = (
-  modelPath: string,
+  backendKey: string,
+  settings: TranscribeSettings,
 ) => ReusableBackend | Promise<ReusableBackend>;
+
+/** Local backends key on the model file; remote adds its endpoint identity. */
+function backendKeyFor(settings: TranscribeSettings): string {
+  if (settings.backend.type === "openai-asr") {
+    const { baseUrl, model } = settings.backend;
+    return `openai-asr:${baseUrl}|${model}|${settings.model.path}`;
+  }
+  return settings.model.path;
+}
 
 function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("Transcription cancelled");
@@ -83,7 +93,7 @@ function transcriptionOptions(
 /** Owns the loaded model and schedules dictation ahead of queued file jobs. */
 export class TranscriptionService {
   private backend: ReusableBackend | undefined;
-  private modelPath: string | undefined;
+  private backendKey: string | undefined;
   private readonly dictationQueue: ReservationState[] = [];
   private readonly fileQueue: TranscriptionJob[] = [];
   private readonly reservationStates = new Set<ReservationState>();
@@ -93,9 +103,20 @@ export class TranscriptionService {
   private readonly shutdownController = new AbortController();
 
   constructor(
-    private readonly createBackend: BackendFactory = async (modelPath) => {
+    private readonly createBackend: BackendFactory = async (_key, settings) => {
       const { TranscribeCppBackend } = await import("./transcription.js");
-      return new TranscribeCppBackend(modelPath);
+      if (settings.backend.type === "openai-asr") {
+        const { OpenAIAsrBackend } = await import("./openai-asr.js");
+        const modelPath = settings.model.path;
+        return new OpenAIAsrBackend(settings.backend, {
+          createFallback: async () => {
+            const local = new TranscribeCppBackend(modelPath);
+            await local.prepare();
+            return local;
+          },
+        });
+      }
+      return new TranscribeCppBackend(settings.model.path);
     },
   ) {}
 
@@ -352,7 +373,7 @@ export class TranscriptionService {
 
     let backend: ReusableBackend;
     try {
-      backend = await this.ensureModel(state.settings.model.path);
+      backend = await this.ensureBackend(state.settings);
     } catch (error) {
       if (state.cancelled) {
         this.settleCancelledReservation(state);
@@ -480,7 +501,7 @@ export class TranscriptionService {
 
     try {
       signal.throwIfAborted();
-      const backend = await this.ensureModel(job.settings.model.path);
+      const backend = await this.ensureBackend(job.settings);
       const text = await this.transcribeBatch(backend, job.settings, job.pcm, signal);
       this.settleJob(job, () => job.resolve(text));
     } catch (error) {
@@ -488,23 +509,24 @@ export class TranscriptionService {
     }
   }
 
-  private async ensureModel(modelPath: string): Promise<ReusableBackend> {
-    if (this.backend && this.modelPath === modelPath) {
+  private async ensureBackend(settings: TranscribeSettings): Promise<ReusableBackend> {
+    const key = backendKeyFor(settings);
+    if (this.backend && this.backendKey === key) {
       await this.backend.prepare();
       return this.backend;
     }
 
     await this.unloadModel();
-    const backend = await this.createBackend(modelPath);
+    const backend = await this.createBackend(key, settings);
     this.backend = backend;
-    this.modelPath = modelPath;
+    this.backendKey = key;
     try {
       await backend.prepare();
       return backend;
     } catch (error) {
       if (this.backend === backend) {
         this.backend = undefined;
-        this.modelPath = undefined;
+        this.backendKey = undefined;
       }
       await backend.dispose().catch(() => undefined);
       throw error;
@@ -515,7 +537,7 @@ export class TranscriptionService {
     const backend = this.backend;
     if (!backend) return;
     this.backend = undefined;
-    this.modelPath = undefined;
+    this.backendKey = undefined;
     await backend.dispose();
   }
 

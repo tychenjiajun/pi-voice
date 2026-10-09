@@ -145,6 +145,7 @@ export function createPiVoiceRuntime(
       chineseOutput: previous.chineseOutput,
       currentModelId: previous.model.id,
       microphone: previous.microphone,
+      backend: previous.backend,
       postActivation: "advance",
     });
     if (configured) rememberSettings(configured);

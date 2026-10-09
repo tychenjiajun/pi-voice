@@ -487,3 +487,61 @@ test("an empty recording never reaches stream finalize", async () => {
   assert.deepEqual(events, ["stream:start", "stream:reset", "batch:0"]);
   await service.shutdown();
 });
+
+function remoteSettings(modelPath: string): TranscribeSettings {
+  return {
+    ...settings(modelPath),
+    backend: {
+      type: "openai-asr",
+      baseUrl: "https://example.com/v1",
+      model: "qwen3-asr-flash",
+      apiKeyEnv: "PI_VOICE_TEST_KEY",
+    },
+  };
+}
+
+test("the factory receives the full settings and backends key on endpoint identity", async () => {
+  const keys: string[] = [];
+  const backendTypes: string[] = [];
+  const service = new TranscriptionService((key, cfg) => {
+    keys.push(key);
+    backendTypes.push(cfg.backend.type);
+    return {
+      async prepare() {},
+      async transcribe(samples: Float32Array) {
+        return String(samples[0] ?? -1);
+      },
+      async dispose() {},
+    };
+  });
+
+  // Same local model file, different backend → distinct keys, both loaded.
+  assert.equal(await service.transcribeFile(settings("model-a"), pcm(1)), "1");
+  assert.equal(await service.transcribeFile(remoteSettings("model-a"), pcm(2)), "2");
+  // Same remote endpoint config → cached like a local model.
+  assert.equal(await service.transcribeFile(remoteSettings("model-a"), pcm(3)), "3");
+
+  assert.equal(keys[0], "model-a");
+  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|qwen3-asr-flash\|model-a$/);
+  assert.equal(keys.length, 2, "identical remote settings reuse the backend");
+  assert.deepEqual(backendTypes, ["transcribe-cpp", "openai-asr"]);
+  await service.shutdown();
+});
+
+test("switching backends unloads the previous backend", async () => {
+  const events: string[] = [];
+  const service = new TranscriptionService((key) => ({
+    async prepare() {},
+    async transcribe(samples: Float32Array) {
+      return String(samples[0] ?? -1);
+    },
+    async dispose() {
+      events.push(`unload:${key}`);
+    },
+  }));
+
+  await service.transcribeFile(settings("model-a"), pcm(1));
+  await service.transcribeFile(remoteSettings("model-a"), pcm(2));
+  assert.deepEqual(events, ["unload:model-a"]);
+  await service.shutdown();
+});
