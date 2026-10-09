@@ -39,7 +39,7 @@ test("does not flag npm, the renamed Git repository, or top-level checkouts", ()
   assert.equal(
     findLegacyGitInstall([
       command("npm:@earendil-works/pi-transcribe"),
-      command("git:github.com/earendil-works/pi-voice"),
+      command("git:github.com/tychenjiajun/pi-voice"),
       command("git:github.com/earendil-works/pi-transcribe", { origin: "top-level" }),
     ]),
     undefined,

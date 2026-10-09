@@ -9,13 +9,13 @@ Press a keyboard shortcut, talk, and the resulting transcript will be put direct
 Install the npm package:
 
 ```bash
-pi install npm:@earendil-works/pi-voice
+pi install npm:@tychenjiajun/pi-voice
 ```
 
 If you prefer being on the development tip, you can install from GitHub:
 
 ```bash
-pi install ssh://git@github.com/earendil-works/pi-voice
+pi install ssh://git@github.com/tychenjiajun/pi-voice
 ```
 
 ## Usage
@@ -65,7 +65,7 @@ pi remove git:github.com/earendil-works/pi-transcribe
 If you installed it into a project with `-l`, run `pi remove -l git:github.com/earendil-works/pi-transcribe` from that project instead. Then install Pi Voice with:
 
 ```bash
-pi install npm:@earendil-works/pi-voice
+pi install npm:@tychenjiajun/pi-voice
 ```
 
 ## File transcription and FFmpeg
@@ -98,7 +98,7 @@ When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance
 To develop or run it from a checkout:
 
 ```bash
-git clone git@github.com:earendil-works/pi-voice.git
+git clone git@github.com:tychenjiajun/pi-voice.git
 cd pi-voice
 npm install --ignore-scripts
 pi -e .

@@ -1,16 +1,16 @@
 {
-  "name": "@earendil-works/pi-voice",
+  "name": "@tychenjiajun/pi-voice",
   "version": "0.1.0",
   "description": "Local speech-to-text for Pi",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/earendil-works/pi-voice.git"
+    "url": "git+https://github.com/tychenjiajun/pi-voice.git"
   },
-  "homepage": "https://github.com/earendil-works/pi-voice#readme",
+  "homepage": "https://github.com/tychenjiajun/pi-voice#readme",
   "bugs": {
-    "url": "https://github.com/earendil-works/pi-voice/issues"
+    "url": "https://github.com/tychenjiajun/pi-voice/issues"
   },
   "files": [
     "src",
