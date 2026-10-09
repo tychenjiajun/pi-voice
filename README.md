@@ -31,31 +31,28 @@ The extension registers:
 
 ## Remote ASR (OpenAI-compatible endpoint)
 
-This fork can send audio to a remote ASR service instead of transcribing with the local model. It speaks the OpenAI chat-completions `input_audio` dialect used by DashScope's `qwen3-asr-flash` in compatible mode, so any endpoint that accepts that shape works (set the base URL to your provider's `/compatible-mode/v1` root, for example `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`).
+Pi Voice can send audio to a remote ASR service instead of transcribing with the local model. It speaks the OpenAI chat-completions `input_audio` dialect: the recording is uploaded as a base64 WAV data URL and the transcript is read from `choices[0].message.content`. Any endpoint that accepts that shape works.
 
 Set it up in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**. You are asked for:
 
 1. **Base URL** — endpoint root, without `/chat/completions`;
-2. **Model** — e.g. `qwen3-asr-flash` (default);
-3. **API key environment variable** — the *name* of an env var (default `DASHSCOPE_API_KEY`). The key itself is read from that variable at runtime and never written to settings.
+2. **Model** — the model name your endpoint expects;
+3. **API key environment variable** — the *name* of an env var. The key itself is read from that variable at runtime and never written to settings.
 
 Then export the key before starting Pi:
 
 ```bash
-export DASHSCOPE_API_KEY=sk-...
+export OPENAI_API_KEY=sk-...
 ```
 
 Behavior:
 
 - **Local model stays as fallback.** If a remote request fails (network, quota, HTTP error), the full recording is transcribed with the configured local model instead; the failure is logged to `~/.pi/agent/pi-voice.log`. Aborted/cancelled transcriptions are never retried locally.
-- **Batch-only.** Remote transcription happens when recording stops (the ASR request carries the whole clip), so there is no streaming preview; recordings are split into ≤3-minute segments to stay under the endpoint's payload cap and the segments are joined.
-- **16 kHz mono WAV** is uploaded as a base64 data URL; the language hint is the configured transcription language normalized to its base subtag (`zh-CN` → `zh`), omitted when set to auto.
+- **Batch-only.** Remote transcription happens when recording stops (the ASR request carries the whole clip), so there is no streaming preview.
+- **16 kHz mono WAV** is uploaded as a base64 data URL.
 - Switching back to **Local model** restores the original behavior; the local model is still required either way (it is the fallback and file transcription still needs it).
 
-Notes:
-
-- `asr_options` (DashScope extension) is attached for models whose name contains `asr`, or whenever an explicit language hint is sent.
-- Transcripts still go through the **Chinese output** script conversion preference.
+Transcripts still go through the **Chinese output** script conversion preference.
 
 ## Upgrading from pi-transcribe
 

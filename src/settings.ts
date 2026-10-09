@@ -20,16 +20,13 @@ export type ChineseOutput = "simplified" | "traditional-taiwan" | "traditional-h
 
 /**
  * Where recordings are transcribed. `transcribe-cpp` runs a local catalog
- * model; `openai-asr` uploads to an OpenAI-compatible chat-completions ASR
- * endpoint (e.g. DashScope `qwen3-asr-flash`). The local catalog model stays
+ * model; `openai-asr` uploads to any OpenAI-compatible chat-completions ASR
+ * endpoint via the `input_audio` content block. The local catalog model stays
  * configured in both cases and acts as the fallback when the remote call fails.
  */
 export type BackendSettings =
   | { type: "transcribe-cpp" }
   | { type: "openai-asr"; baseUrl: string; model: string; apiKeyEnv: string };
-
-export const DEFAULT_ASR_API_KEY_ENV = "DASHSCOPE_API_KEY";
-export const DEFAULT_ASR_MODEL = "qwen3-asr-flash";
 
 function defaultChineseOutput(): ChineseOutput {
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
@@ -134,15 +131,17 @@ function validateBackend(value: unknown): BackendSettings | undefined {
     // settings" that silently drops the whole configuration.
     if (typeof value.baseUrl !== "string" || !value.baseUrl.trim()) return undefined;
     if (typeof value.model !== "string" || !value.model.trim()) return undefined;
-    const apiKeyEnv =
-      typeof value.apiKeyEnv === "string" && value.apiKeyEnv.trim()
-        ? value.apiKeyEnv.trim()
-        : DEFAULT_ASR_API_KEY_ENV;
+    if (
+      typeof value.apiKeyEnv !== "string" ||
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(value.apiKeyEnv.trim())
+    ) {
+      return undefined;
+    }
     return {
       type: "openai-asr",
       baseUrl: value.baseUrl.trim(),
       model: value.model.trim(),
-      apiKeyEnv,
+      apiKeyEnv: value.apiKeyEnv.trim(),
     };
   }
   return undefined;

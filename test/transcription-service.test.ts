@@ -494,7 +494,7 @@ function remoteSettings(modelPath: string): TranscribeSettings {
     backend: {
       type: "openai-asr",
       baseUrl: "https://example.com/v1",
-      model: "qwen3-asr-flash",
+      model: "asr-model",
       apiKeyEnv: "PI_VOICE_TEST_KEY",
     },
   };
@@ -522,7 +522,7 @@ test("the factory receives the full settings and backends key on endpoint identi
   assert.equal(await service.transcribeFile(remoteSettings("model-a"), pcm(3)), "3");
 
   assert.equal(keys[0], "model-a");
-  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|qwen3-asr-flash\|model-a$/);
+  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|asr-model\|model-a$/);
   assert.equal(keys.length, 2, "identical remote settings reuse the backend");
   assert.deepEqual(backendTypes, ["transcribe-cpp", "openai-asr"]);
   await service.shutdown();

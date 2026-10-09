@@ -19,8 +19,6 @@ import {
 } from "./microphone-picker.js";
 import { runModelSelection } from "./onboarding.js";
 import {
-  DEFAULT_ASR_API_KEY_ENV,
-  DEFAULT_ASR_MODEL,
   writeSettings,
   type BackendSettings,
   type ChineseOutput,
@@ -369,7 +367,7 @@ async function chooseBackendType(
       value: "openai-asr",
       label: "Remote ASR (OpenAI-compatible)",
       description:
-        "Upload audio to a chat-completions ASR endpoint such as DashScope qwen3-asr-flash; falls back to the local model if the request fails",
+        "Upload audio to any OpenAI-compatible chat-completions ASR endpoint; falls back to the local model if the request fails",
     },
   ];
   return ctx.ui.custom<"transcribe-cpp" | "openai-asr" | undefined>(
@@ -402,7 +400,7 @@ function validateBaseUrl(value: string): string | undefined {
 function validateEnvName(value: string): string | undefined {
   if (!value) return "Environment variable name is required";
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
-    return "Use a plain environment variable name, e.g. DASHSCOPE_API_KEY";
+    return "Use a plain environment variable name, e.g. OPENAI_API_KEY";
   }
   return undefined;
 }
@@ -430,14 +428,15 @@ async function editBackend(
     title: "ASR base URL",
     description: "OpenAI-compatible endpoint root, without the /chat/completions path",
     value: current?.baseUrl ?? "",
-    placeholder: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    placeholder: "https://api.example.com/v1",
     validate: validateBaseUrl,
   });
   if (baseUrl === undefined) return false;
 
   const model = await promptText(ctx, {
     title: "ASR model",
-    value: current?.model ?? DEFAULT_ASR_MODEL,
+    value: current?.model ?? "",
+    placeholder: "whisper-1",
     validate: (value) => (value ? undefined : "Model name is required"),
   });
   if (model === undefined) return false;
@@ -445,7 +444,8 @@ async function editBackend(
   const apiKeyEnv = await promptText(ctx, {
     title: "API key environment variable",
     description: "The key itself is read from this variable at runtime; it is never stored in settings",
-    value: current?.apiKeyEnv ?? DEFAULT_ASR_API_KEY_ENV,
+    value: current?.apiKeyEnv ?? "",
+    placeholder: "OPENAI_API_KEY",
     validate: validateEnvName,
   });
   if (apiKeyEnv === undefined) return false;

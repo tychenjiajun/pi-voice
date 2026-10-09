@@ -18,35 +18,20 @@ export type LocalFallback = Pick<
 >;
 
 export type AsrRequest = {
-  /** `data:audio/wav;base64,…` of one PCM segment. */
+  /** `data:audio/wav;base64,…` of the whole recording. */
   dataUrl: string;
-  /** DashScope-style language code (e.g. `zh`), absent for auto-detection. */
-  language?: string;
 };
 
-/** Uploads one segment and returns the transcript text. Injectable for tests. */
+/** Uploads the recording and returns the transcript text. Injectable for tests. */
 export type AsrTransport = (
   request: AsrRequest,
   signal?: AbortSignal,
 ) => Promise<string>;
 
-/**
- * Segments longer recordings so the base64 payload stays under the 10 MB cap
- * of OpenAI-compatible ASR endpoints (3 min of 16 kHz mono 16-bit WAV ≈ 5.8 MB
- * raw → ~7.7 MB base64).
- */
-export const MAX_SEGMENT_SECONDS = 180;
-
 const SAMPLE_RATE = CAPTURE_SAMPLE_RATE;
 const CJK = /[㐀-䶿一-鿿豈-﫿]/;
-/** `zh-CN` → `zh`, `pt-BR` → `pt`; auto detection is passed through as absent. */
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_RETRIES = 1;
-
-export function asrLanguage(language: string | undefined): string | undefined {
-  if (!language || language === "auto") return undefined;
-  return language.split("-")[0]!.toLowerCase();
-}
 
 /** 16-bit mono PCM WAV from float samples in [-1, 1]. */
 export function encodeWav(pcm: Float32Array, sampleRate: number): Buffer {
@@ -77,20 +62,14 @@ export function toDataUrl(pcm: Float32Array, sampleRate: number): string {
 }
 
 /**
- * Chat-completions body for DashScope-compatible ASR. `asr_options` is a
- * DashScope extension, so it is only attached for ASR-named models (mirroring
- * DoubleTapTalk) to keep plain OpenAI-compatible endpoints from rejecting it.
+ * Chat-completions body with an `input_audio` content block carrying the WAV
+ * recording as a base64 data URL. Generic OpenAI-compatible shape — no
+ * provider-specific extensions are attached.
  */
 export function buildChatBody(
   model: string,
   dataUrl: string,
-  language: string | undefined,
 ): Record<string, unknown> {
-  const asrNamed = model.toLowerCase().includes("asr");
-  const asrOptions =
-    asrNamed || language !== undefined
-      ? { enable_itn: false, ...(language !== undefined ? { language } : {}) }
-      : undefined;
   return {
     model,
     messages: [
@@ -100,7 +79,6 @@ export function buildChatBody(
       },
     ],
     stream: false,
-    ...(asrOptions ? { asr_options: asrOptions } : {}),
   };
 }
 
@@ -126,7 +104,7 @@ function createOpenAITransport(config: OpenAIAsrSettings): {
   });
   return {
     transport: async (request, signal) => {
-      const body = buildChatBody(config.model, request.dataUrl, request.language);
+      const body = buildChatBody(config.model, request.dataUrl);
       const completion = (await client.chat.completions.create(
         body as never,
         { signal } as never,
@@ -166,8 +144,8 @@ export type OpenAIAsrBackendDeps = {
 /**
  * Batch-only remote backend: `startStream` resolves to undefined so the
  * service records the whole clip and transcribes it after stop, exactly like
- * a non-streaming local model. Remote failures fall back to the local model
- * (DoubleTapTalk's degradation model); aborts are never retried locally.
+ * a non-streaming local model. Remote failures fall back to the local model;
+ * aborts are never retried locally.
  */
 export class OpenAIAsrBackend {
   private client: { transport: AsrTransport; dispose: () => void } | undefined;
@@ -200,34 +178,23 @@ export class OpenAIAsrBackend {
     if (pcm.length === 0) throw new Error("No audio samples were provided");
     const signal = options.signal;
     try {
-      const language = asrLanguage(options.language);
       let transport = this.injected;
       if (!transport) {
         await this.prepare();
         transport = this.client!.transport;
       }
-      const perSegment = MAX_SEGMENT_SECONDS * SAMPLE_RATE;
-      const parts: string[] = [];
-      for (let offset = 0; offset < pcm.length; offset += perSegment) {
-        signal?.throwIfAborted();
-        const segment = pcm.subarray(
-          offset,
-          Math.min(offset + perSegment, pcm.length),
-        );
-        parts.push(
-          await transport(
-            { dataUrl: toDataUrl(segment, SAMPLE_RATE), language },
-            signal,
-          ),
-        );
-        signal?.throwIfAborted();
-      }
+      signal?.throwIfAborted();
+      const text = await transport(
+        { dataUrl: toDataUrl(pcm, SAMPLE_RATE) },
+        signal,
+      );
+      signal?.throwIfAborted();
       writeLog(
         "debug",
         "voice",
-        `remote ASR transcribed ${(pcm.length / SAMPLE_RATE).toFixed(1)}s in ${parts.length} request(s)`,
+        `remote ASR transcribed ${(pcm.length / SAMPLE_RATE).toFixed(1)}s`,
       );
-      return await finishRemoteTranscript(parts.join("\n"), options);
+      return await finishRemoteTranscript(text, options);
     } catch (error) {
       if (signal?.aborted || this.disposed) throw error;
       if (!this.deps.createFallback) throw error;
@@ -260,7 +227,12 @@ export class OpenAIAsrBackend {
 
   private fallbackBackend(): Promise<LocalFallback> {
     if (!this.fallback) {
-      this.fallback = this.deps.createFallback!();
+      // A rejected fallback is not cached: a later attempt can re-create the
+      // local model instead of re-throwing a stale failure.
+      this.fallback = this.deps.createFallback!().catch((error) => {
+        this.fallback = undefined;
+        throw error;
+      });
     }
     return this.fallback;
   }

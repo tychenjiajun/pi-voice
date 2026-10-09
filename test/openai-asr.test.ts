@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  asrLanguage,
   buildChatBody,
   encodeWav,
   finishRemoteTranscript,
-  MAX_SEGMENT_SECONDS,
   OpenAIAsrBackend,
   toDataUrl,
   type AsrRequest,
@@ -14,8 +12,8 @@ import type { TranscriptionOptions } from "../src/transcription.js";
 
 const CONFIG = {
   type: "openai-asr",
-  baseUrl: "https://example.com/compatible-mode/v1",
-  model: "qwen3-asr-flash",
+  baseUrl: "https://example.com/v1",
+  model: "asr-model",
   apiKeyEnv: "PI_VOICE_TEST_KEY",
 } as const;
 
@@ -47,30 +45,16 @@ test("toDataUrl produces a base64 WAV data URL", () => {
   assert.equal(decoded.toString("ascii", 0, 4), "RIFF");
 });
 
-test("asrLanguage normalizes codes and maps auto to absent", () => {
-  assert.equal(asrLanguage(undefined), undefined);
-  assert.equal(asrLanguage("auto"), undefined);
-  assert.equal(asrLanguage("zh-CN"), "zh");
-  assert.equal(asrLanguage("en-US"), "en");
-  assert.equal(asrLanguage("pt-BR"), "pt");
-  assert.equal(asrLanguage("zh"), "zh");
-});
-
-test("buildChatBody attaches asr_options only for ASR models or explicit language", () => {
+test("buildChatBody sends an input_audio block with no provider-specific fields", () => {
   const dataUrl = "data:audio/wav;base64,AA==";
-
-  const asr = buildChatBody("qwen3-asr-flash", dataUrl, "zh");
-  assert.equal(asr.stream, false);
-  assert.deepEqual(asr.asr_options, { enable_itn: false, language: "zh" });
-  const messages = asr.messages as Array<{
+  const body = buildChatBody("asr-model", dataUrl);
+  assert.equal(body.stream, false);
+  assert.equal(body.asr_options, undefined, "no provider-specific asr_options extension");
+  const messages = body.messages as Array<{
     content: Array<{ type: string; input_audio: { data: string } }>;
   }>;
   assert.equal(messages[0]!.content[0]!.type, "input_audio");
   assert.equal(messages[0]!.content[0]!.input_audio.data, dataUrl);
-
-  // A plain chat model without a language hint must not see the DashScope extension.
-  const plain = buildChatBody("some-chat-model", dataUrl, undefined);
-  assert.equal(plain.asr_options, undefined);
 });
 
 test("finishRemoteTranscript trims and applies the Chinese output preference", async () => {
@@ -105,35 +89,6 @@ test("transcribe uploads one WAV data URL and returns the transcript", async () 
   assert.equal(text, "remote text");
   assert.equal(requests.length, 1);
   assert.match(requests[0]!.dataUrl, /^data:audio\/wav;base64,/);
-  assert.equal(requests[0]!.language, undefined, "auto detection sends no language");
-  await backend.dispose();
-});
-
-test("transcribe forwards the normalized language hint", async () => {
-  const requests: AsrRequest[] = [];
-  const backend = new OpenAIAsrBackend(CONFIG, {
-    transport: async (request) => {
-      requests.push(request);
-      return "你好";
-    },
-  });
-  await backend.transcribe(pcm(1), { language: "zh-CN" });
-  assert.equal(requests[0]!.language, "zh");
-  await backend.dispose();
-});
-
-test("recordings beyond the segment limit are split into multiple requests", async () => {
-  const requests: AsrRequest[] = [];
-  const backend = new OpenAIAsrBackend(CONFIG, {
-    transport: async (request) => {
-      requests.push(request);
-      return `part-${requests.length}`;
-    },
-  });
-  const long = pcm(MAX_SEGMENT_SECONDS + 1);
-  const text = await backend.transcribe(long);
-  assert.equal(requests.length, 2);
-  assert.equal(text, "part-1\npart-2");
   await backend.dispose();
 });
 
@@ -213,5 +168,31 @@ test("empty audio is rejected like the local backend", async () => {
     transport: async () => "text",
   });
   await assert.rejects(backend.transcribe(new Float32Array(0)), /No audio samples/);
+  await backend.dispose();
+});
+
+test("a failed fallback is re-created on the next attempt", async () => {
+  let calls = 0;
+  const backend = new OpenAIAsrBackend(CONFIG, {
+    transport: async () => {
+      throw new Error("HTTP 500");
+    },
+    createFallback: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("local model missing");
+      return {
+        async prepare() {},
+        async transcribe() {
+          return "local text";
+        },
+        async dispose() {},
+      };
+    },
+  });
+
+  await assert.rejects(backend.transcribe(pcm(1)), /local model missing/);
+  const text = await backend.transcribe(pcm(1));
+  assert.equal(text, "local text");
+  assert.equal(calls, 2, "the fallback factory ran again after the first failure");
   await backend.dispose();
 });
