@@ -145,7 +145,7 @@ export function createPiVoiceRuntime(
       preferredLanguages: previous.preferredLanguages,
       transcriptionLanguage: previous.transcriptionLanguage,
       chineseOutput: previous.chineseOutput,
-      currentModelId: previous.model.id,
+      currentModelId: previous.model?.id,
       microphone: previous.microphone,
       backend: previous.backend,
       polishEnabled: previous.polishEnabled,
@@ -165,12 +165,12 @@ export function createPiVoiceRuntime(
       ctx.ui.notify(settingsReadWarning, "warning");
     }
 
-    if (settings && existsSync(settings.model.path)) {
+    if (settings && (!settings.model || existsSync(settings.model.path))) {
       return { configured: settings, completedFirstRun: false };
     }
 
     const previous = settings;
-    if (settings) {
+    if (settings?.model) {
       ctx.ui.notify(
         `Configured model file is missing: ${settings.model.path}. Choose a model again; nothing will be downloaded without confirmation.`,
         "warning",
@@ -189,15 +189,15 @@ export function createPiVoiceRuntime(
     await loadSettingsOnce();
     if (settingsReadWarning && !settings) {
       throw new Error(
-        `${settingsReadWarning} Ask the user to run /voice-settings in Pi's interactive TUI to set up Pi Voice (a local model, and optionally a remote ASR endpoint), then retry transcribe_file.`,
+        `${settingsReadWarning} Ask the user to run /voice-settings in Pi's interactive TUI to set up Pi Voice (a local model or a remote ASR endpoint), then retry transcribe_file.`,
       );
     }
     if (!settings) {
       throw new Error(
-        "Pi Voice is not configured. Ask the user to run /voice-settings in Pi's interactive TUI once to set up Pi Voice (choose and download a local model, and optionally a remote ASR endpoint), then retry transcribe_file.",
+        "Pi Voice is not configured. Ask the user to run /voice-settings in Pi's interactive TUI once to set up Pi Voice (choose and download a local model, or configure a remote ASR endpoint), then retry transcribe_file.",
       );
     }
-    if (!existsSync(settings.model.path)) {
+    if (settings.model && !existsSync(settings.model.path)) {
       throw new Error(
         `The configured transcription model is missing: ${settings.model.path}. Ask the user to run /voice-settings and choose a model again, then retry transcribe_file.`,
       );
@@ -408,7 +408,7 @@ export function createPiVoiceRuntime(
     const { clearTranscribeWidget, showTranscribeStatus } = await loadVisualizer();
     logStep("loading settings");
     await loadSettingsOnce();
-    if (settings && existsSync(settings.model.path)) {
+    if (settings && (!settings.model || existsSync(settings.model.path))) {
       showTranscribeStatus(ctx, "Starting microphone…");
     } else {
       // Setup panes replace only the editor, so a status line set here or by

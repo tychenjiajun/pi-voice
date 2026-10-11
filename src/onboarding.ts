@@ -20,6 +20,7 @@ import { tryVoice } from "./try-it.js";
 import {
   DEFAULT_MICROPHONE,
   settingsForModel,
+  settingsRemoteOnly,
   writeSettings,
   type BackendSettings,
   type ChineseOutput,
@@ -96,7 +97,7 @@ export async function runModelSelection(
     }),
     (settings) => {
       configured = settings;
-      currentModelId = settings.model.id;
+      currentModelId = settings.model?.id;
     },
   );
 
@@ -237,7 +238,7 @@ export async function changeOnboardingModel(
           expanded: true,
           onboardingStep: 3,
         })
-      : await chooseCatalogModel(ctx, languages, chosen?.model.id ?? current.model.id, {
+      : await chooseCatalogModel(ctx, languages, chosen?.model?.id ?? current.model?.id, {
           postActivation: "advance",
           onActivate: activation.activate,
           cancelLabel: "back",
@@ -274,7 +275,7 @@ export type SetupMode = "local" | "remote";
 
 /**
  * First screen of first-run setup: on-device model, or a remote ASR endpoint.
- * A local model is downloaded in both cases because it is the fallback.
+ * The modes are exclusive: remote setup downloads no local model.
  */
 async function chooseSetupMode(ctx: ExtensionContext): Promise<SetupMode | undefined> {
   const choices: SingleSelectChoice<SetupMode>[] = [
@@ -287,7 +288,7 @@ async function chooseSetupMode(ctx: ExtensionContext): Promise<SetupMode | undef
       value: "remote",
       label: "Remote ASR (OpenAI-compatible)",
       description:
-        "Send audio to an OpenAI-compatible ASR endpoint; a local model is still downloaded as fallback",
+        "Send audio to an OpenAI-compatible ASR endpoint; no local model is downloaded",
     },
   ];
   return ctx.ui.custom<SetupMode | undefined>((tui, theme, keybindings, done) =>
@@ -323,7 +324,6 @@ export async function runOnboarding(
     if (!backend) return undefined;
     warnMissingApiKey(ctx, backend.apiKeyEnv);
   }
-  const usingRemote = backend !== undefined;
 
   let languages = defaultSpokenLanguages();
   // Navigation cannot undo a completed settings commit. Keep it across a
@@ -336,6 +336,18 @@ export async function runOnboarding(
     });
     if (!chosen?.confirmed) return configured;
     languages = chosen.languages;
+
+    // Remote mode is remote-only: no model step, settings are complete once
+    // the endpoint and languages are chosen.
+    if (backend?.type === "openai-asr") {
+      const settings = settingsRemoteOnly({ backend, shortcut, preferredLanguages: languages });
+      if (!(await saveOnboardingSettings(ctx, settings))) return configured;
+      configured = settings;
+      return finishOnboarding(ctx, configured, (current) =>
+        changeOnboardingModel(ctx, current),
+      );
+    }
+
     // The picks are judged on the benchmark rig; the Try it step measures
     // the real wait on this machine.
     const picks = recommendModels(CATALOG_MODELS, languages);
@@ -355,7 +367,6 @@ export async function runOnboarding(
         activate,
         {
           onboardingStep: 3,
-          ...(usingRemote ? { title: "Choose the local fallback model" } : {}),
         },
       );
       await waitForCommits();
@@ -368,12 +379,12 @@ export async function runOnboarding(
         continue;
       }
 
-      const selection = await chooseCatalogModel(ctx, languages, configured?.model.id, {
+      const selection = await chooseCatalogModel(ctx, languages, configured?.model?.id, {
         postActivation: "advance",
         onActivate: activate,
         cancelLabel: "back",
         onboardingStep: 3,
-        title: usingRemote ? "Choose the local fallback model" : "Browse all models",
+        title: "Browse all models",
       });
       await waitForCommits();
       if (selection?.type === "complete" && configured) {

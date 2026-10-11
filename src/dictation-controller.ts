@@ -1,7 +1,11 @@
 import { CAPTURE_SAMPLE_RATE } from "./audio-constants.js";
 import { describeError, log, logStep, sinceKeyPress } from "./log.js";
 import { PcmChunker } from "./pcm-chunker.js";
-import type { MicrophoneSetting, TranscribeSettings } from "./settings.js";
+import {
+  transcriptionModelLabel,
+  type MicrophoneSetting,
+  type TranscribeSettings,
+} from "./settings.js";
 import type { DictationReservation, TranscriptionService } from "./transcription-service.js";
 
 /** What a recording captured. `interruption` is why it ended early, if it did. */
@@ -90,7 +94,7 @@ export class DictationController {
   /** Reserves the model for a take; on failure the state says why. */
   private reserve(settings: TranscribeSettings): Take | undefined {
     this.readiness = "loading";
-    logStep("reserving model", settings.model.id);
+    logStep("reserving model", transcriptionModelLabel(settings));
     const reservedAt = this.now();
     let reservation: DictationReservation;
     try {

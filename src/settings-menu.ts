@@ -100,7 +100,9 @@ export function settingsHomeChoices(
   configured: TranscribeSettings,
   permission: Permission,
 ): SettingsHomeChoice[] {
-  const model = getCatalogModel(configured.model.id)!;
+  // Local mode always carries a model; remote mode never does.
+  const model = configured.model ? getCatalogModel(configured.model.id) : undefined;
+  const remote = configured.backend.type === "openai-asr";
   const choices: SettingsHomeChoice[] = [
     {
       value: "preferred-languages",
@@ -108,18 +110,24 @@ export function settingsHomeChoices(
       summary: preferredLanguagesSummary(configured.preferredLanguages),
       description: "Languages you speak, used to rank and recommend transcription models",
     },
-    {
+  ];
+
+  if (model) {
+    choices.push({
       value: "model",
       label: "Model",
       summary: model.name,
       description: "Switch between downloaded models, or download a new one",
-    },
+    });
+  }
+
+  choices.push(
     {
       value: "backend",
       label: "Transcription backend",
       summary: backendSummary(configured.backend),
       description:
-        "Local model, or an OpenAI-compatible remote ASR endpoint (local model stays as fallback)",
+        "Local model or remote ASR endpoint; the two modes are exclusive",
     },
     {
       value: "post-processing",
@@ -128,24 +136,25 @@ export function settingsHomeChoices(
       description:
         "Refine transcripts with Pi's current model after ASR, like context compaction",
     },
-    {
+  );
+
+  if (model) {
+    choices.push({
       value: "transcription-language",
       label: "Transcription language",
       summary: transcriptionLanguageSummary(configured.transcriptionLanguage, model),
-      description:
-        configured.backend.type === "openai-asr"
-          ? "Used by the local fallback and Chinese output conversion; the remote endpoint detects the language itself"
-          : "Language expected in recordings, or automatic detection when supported",
-    },
-  ];
+      description: "Language expected in recordings, or automatic detection when supported",
+    });
+  }
 
   // Chinese script conversion applies when the configured language is Chinese,
   // when a preferred language is Chinese, or when a detecting model can pick
-  // Chinese on its own. Gating only on the first two leaves the row unreachable
-  // for anyone relying on auto-detection.
+  // Chinese on its own. Remote mode can always produce Chinese, so its row is
+  // never gated.
   const detectsChinese =
-    model.capabilities.languageDetection && model.languages.some(isChineseLanguage);
+    model?.capabilities.languageDetection && model.languages.some(isChineseLanguage);
   if (
+    remote ||
     isChineseLanguage(configured.transcriptionLanguage) ||
     configured.preferredLanguages.some(isChineseLanguage) ||
     detectsChinese
@@ -264,7 +273,8 @@ async function chooseTranscriptionLanguage(
   ctx: ExtensionContext,
   configured: TranscribeSettings,
 ): Promise<TranscriptionLanguage | undefined> {
-  const model = getCatalogModel(configured.model.id)!;
+  const model = configured.model ? getCatalogModel(configured.model.id) : undefined;
+  if (!model) return undefined;
   return ctx.ui.custom<TranscriptionLanguage | undefined>(
     (tui, theme, keybindings, done) =>
       createTranscriptionLanguagePicker(
@@ -297,12 +307,26 @@ async function editBackend(
   if (!type) return false;
   if (type === "transcribe-cpp") {
     if (configured.backend.type === "transcribe-cpp") return false;
-    return saveUpdatedSettings(
-      ctx,
-      configured,
-      { ...configured, backend: { type: "transcribe-cpp" } },
-      "Using the local model",
-    );
+    // Remote-only settings carry no local model; pick one first. Every commit
+    // writes local-mode settings, so cancelling keeps the remote setup.
+    const updated = await runModelSelection(ctx, {
+      shortcut: configured.shortcut,
+      preferredLanguages: configured.preferredLanguages,
+      transcriptionLanguage: configured.transcriptionLanguage,
+      chineseOutput: configured.chineseOutput,
+      microphone: configured.microphone,
+      backend: { type: "transcribe-cpp" },
+      polishEnabled: configured.polishEnabled,
+      polishModel: configured.polishModel,
+      postActivation: "stay",
+    });
+    if (!updated) {
+      ctx.ui.notify("Local mode needs a local model; keeping remote ASR", "info");
+      return false;
+    }
+    Object.assign(configured, updated);
+    ctx.ui.notify("Using the local model", "info");
+    return true;
   }
 
   const current =
@@ -313,8 +337,8 @@ async function editBackend(
   const saved = await saveUpdatedSettings(
     ctx,
     configured,
-    { ...configured, backend },
-    `Remote ASR configured (${backend.model})`,
+    { ...configured, backend, model: undefined },
+    `Remote ASR configured (${backend.model}); the local model is no longer used`,
   );
   if (saved) warnMissingApiKey(ctx, backend.apiKeyEnv);
   return saved;
@@ -514,7 +538,7 @@ export async function showSettingsMenu(
         preferredLanguages: configured.preferredLanguages,
         transcriptionLanguage: configured.transcriptionLanguage,
         chineseOutput: configured.chineseOutput,
-        currentModelId: configured.model.id,
+        currentModelId: configured.model?.id,
         microphone: configured.microphone,
         backend: configured.backend,
         polishEnabled: configured.polishEnabled,
@@ -550,8 +574,12 @@ export async function showSettingsMenu(
       ) {
         continue;
       }
-      const model = getCatalogModel(configured.model.id)!;
-      const summary = transcriptionLanguageSummary(transcriptionLanguage, model);
+      const model = configured.model
+        ? getCatalogModel(configured.model.id)
+        : undefined;
+      const summary = model
+        ? transcriptionLanguageSummary(transcriptionLanguage, model)
+        : transcriptionLanguage;
       await saveUpdatedSettings(
         ctx,
         configured,

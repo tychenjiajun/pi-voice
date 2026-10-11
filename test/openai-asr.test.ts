@@ -93,44 +93,23 @@ test("transcribe uploads one WAV data URL and returns the transcript", async () 
   await backend.dispose();
 });
 
-test("a remote failure falls back to the local model", async () => {
-  const fallbackCalls: Float32Array[] = [];
+test("a remote failure surfaces to the caller", async () => {
   const backend = new OpenAIAsrBackend(CONFIG, {
     transport: async () => {
       throw new Error("HTTP 500");
     },
-    createFallback: async () => ({
-      async prepare() {},
-      async transcribe(samples: Float32Array) {
-        fallbackCalls.push(samples);
-        return "local text";
-      },
-      async dispose() {},
-    }),
   });
-
-  const samples = pcm(1);
-  const text = await backend.transcribe(samples);
-  assert.equal(text, "local text");
-  assert.equal(fallbackCalls.length, 1);
-  assert.equal(fallbackCalls[0], samples, "the full clip reaches the fallback");
+  await assert.rejects(backend.transcribe(pcm(1)), /HTTP 500/);
   await backend.dispose();
 });
 
-test("aborting during a remote call never falls back", async () => {
+test("aborting during a remote call surfaces the abort", async () => {
   const controller = new AbortController();
   const backend = new OpenAIAsrBackend(CONFIG, {
     transport: async () => {
       controller.abort();
       throw new Error("aborted");
     },
-    createFallback: async () => ({
-      async prepare() {},
-      async transcribe() {
-        throw new Error("fallback must not run");
-      },
-      async dispose() {},
-    }),
   });
 
   await assert.rejects(
@@ -140,7 +119,7 @@ test("aborting during a remote call never falls back", async () => {
   await backend.dispose();
 });
 
-test("without a fallback configured, remote errors surface directly", async () => {
+test("remote errors surface directly", async () => {
   const backend = new OpenAIAsrBackend(CONFIG, {
     transport: async () => {
       throw new Error("HTTP 401");
@@ -150,27 +129,7 @@ test("without a fallback configured, remote errors surface directly", async () =
   await backend.dispose();
 });
 
-test("a missing API key degrades to the local model instead of failing prepare", async () => {
-  delete process.env[CONFIG.apiKeyEnv];
-  const fallbackCalls: Float32Array[] = [];
-  const backend = new OpenAIAsrBackend(CONFIG, {
-    createFallback: async () => ({
-      async prepare() {},
-      async transcribe(samples: Float32Array) {
-        fallbackCalls.push(samples);
-        return "local text";
-      },
-      async dispose() {},
-    }),
-  });
-  await backend.prepare();
-  const text = await backend.transcribe(pcm(1));
-  assert.equal(text, "local text");
-  assert.equal(fallbackCalls.length, 1);
-  await backend.dispose();
-});
-
-test("without a fallback, a missing API key surfaces from transcribe", async () => {
+test("a missing API key surfaces from transcribe", async () => {
   delete process.env[CONFIG.apiKeyEnv];
   const backend = new OpenAIAsrBackend(CONFIG);
   await backend.prepare();
@@ -194,31 +153,5 @@ test("empty audio is rejected like the local backend", async () => {
     transport: async () => "text",
   });
   await assert.rejects(backend.transcribe(new Float32Array(0)), /No audio samples/);
-  await backend.dispose();
-});
-
-test("a failed fallback is re-created on the next attempt", async () => {
-  let calls = 0;
-  const backend = new OpenAIAsrBackend(CONFIG, {
-    transport: async () => {
-      throw new Error("HTTP 500");
-    },
-    createFallback: async () => {
-      calls += 1;
-      if (calls === 1) throw new Error("local model missing");
-      return {
-        async prepare() {},
-        async transcribe() {
-          return "local text";
-        },
-        async dispose() {},
-      };
-    },
-  });
-
-  await assert.rejects(backend.transcribe(pcm(1)), /local model missing/);
-  const text = await backend.transcribe(pcm(1));
-  assert.equal(text, "local text");
-  assert.equal(calls, 2, "the fallback factory ran again after the first failure");
   await backend.dispose();
 });

@@ -5,17 +5,10 @@ import { describeError, writeLog } from "./log.js";
 import type { BackendSettings, ChineseOutput } from "./settings.js";
 import type {
   DictationStream,
-  TranscribeCppBackend,
   TranscriptionOptions,
 } from "./transcription.js";
 
 type OpenAIAsrSettings = Extract<BackendSettings, { type: "openai-asr" }>;
-
-/** The slice of the local backend this module needs for offline fallback. */
-export type LocalFallback = Pick<
-  TranscribeCppBackend,
-  "prepare" | "transcribe" | "dispose"
->;
 
 export type AsrRequest = {
   /** `data:audio/wav;base64,…` of the whole recording. */
@@ -136,8 +129,6 @@ export async function finishRemoteTranscript(
 }
 
 export type OpenAIAsrBackendDeps = {
-  /** Creates the local model used when a remote call fails. */
-  createFallback?: () => Promise<LocalFallback>;
   /** Overrides the network transport (tests). */
   transport?: AsrTransport;
 };
@@ -145,12 +136,11 @@ export type OpenAIAsrBackendDeps = {
 /**
  * Batch-only remote backend: `startStream` resolves to undefined so the
  * service records the whole clip and transcribes it after stop, exactly like
- * a non-streaming local model. Remote failures fall back to the local model;
- * aborts are never retried locally.
+ * a non-streaming local model. Remote failures surface to the caller; there
+ * is no local fallback.
  */
 export class OpenAIAsrBackend {
   private client: { transport: AsrTransport; dispose: () => void } | undefined;
-  private fallback: Promise<LocalFallback> | undefined;
   private disposed = false;
   private readonly injected: AsrTransport | undefined;
 
@@ -164,8 +154,8 @@ export class OpenAIAsrBackend {
   async prepare(): Promise<void> {
     if (this.disposed) throw new Error("Remote ASR backend has been disposed");
     // The transport is created lazily in transcribe() so that a missing API
-    // key (or any construction failure) falls back to the local model instead
-    // of failing prepare() and blocking every subsequent transcription.
+    // key surfaces per recording instead of failing prepare() and blocking
+    // every subsequent transcription.
   }
 
   /** Batch-only: the dictation service drops live chunks and transcribes on stop. */
@@ -184,9 +174,9 @@ export class OpenAIAsrBackend {
       if (!transport) {
         if (this.disposed) throw new Error("Remote ASR backend has been disposed");
         // Lazily build the transport inside the try so a missing API key or
-        // any construction failure falls back to the local model. Success is
-        // cached; a failure is not, so a later call retries once the env is
-        // fixed.
+        // any construction failure is reported like a request failure.
+        // Success is cached; a failure is not, so a later call retries once
+        // the env is fixed.
         const client = this.client ?? createOpenAITransport(this.config);
         this.client = client;
         transport = client.transport;
@@ -205,20 +195,12 @@ export class OpenAIAsrBackend {
       return await finishRemoteTranscript(text, options);
     } catch (error) {
       if (signal?.aborted || this.disposed) throw error;
-      if (!this.deps.createFallback) throw error;
       writeLog(
         "warn",
         "voice",
-        `remote ASR failed (${describeError(error)}); falling back to the local model`,
+        `remote ASR failed (${describeError(error)})`,
       );
-      try {
-        const local = await this.fallbackBackend();
-        return await local.transcribe(pcm, options);
-      } catch (fallbackError) {
-        throw new Error(
-          `Remote ASR failed (${describeError(error)}) and the local fallback failed (${describeError(fallbackError)})`,
-        );
-      }
+      throw error;
     }
   }
 
@@ -227,21 +209,5 @@ export class OpenAIAsrBackend {
     this.disposed = true;
     this.client?.dispose();
     this.client = undefined;
-    if (this.fallback) {
-      const local = await this.fallback.catch(() => undefined);
-      await local?.dispose().catch(() => undefined);
-    }
-  }
-
-  private fallbackBackend(): Promise<LocalFallback> {
-    if (!this.fallback) {
-      // A rejected fallback is not cached: a later attempt can re-create the
-      // local model instead of re-throwing a stale failure.
-      this.fallback = this.deps.createFallback!().catch((error) => {
-        this.fallback = undefined;
-        throw error;
-      });
-    }
-    return this.fallback;
   }
 }

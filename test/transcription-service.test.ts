@@ -488,9 +488,11 @@ test("an empty recording never reaches stream finalize", async () => {
   await service.shutdown();
 });
 
-function remoteSettings(modelPath: string): TranscribeSettings {
+function remoteSettings(): TranscribeSettings {
+  // Remote-only settings never carry a local model.
+  const { model: _model, ...base } = settings("model-a");
   return {
-    ...settings(modelPath),
+    ...base,
     backend: {
       type: "openai-asr",
       baseUrl: "https://example.com/v1",
@@ -517,12 +519,12 @@ test("the factory receives the full settings and backends key on endpoint identi
 
   // Same local model file, different backend → distinct keys, both loaded.
   assert.equal(await service.transcribeFile(settings("model-a"), pcm(1)), "1");
-  assert.equal(await service.transcribeFile(remoteSettings("model-a"), pcm(2)), "2");
+  assert.equal(await service.transcribeFile(remoteSettings(), pcm(2)), "2");
   // Same remote endpoint config → cached like a local model.
-  assert.equal(await service.transcribeFile(remoteSettings("model-a"), pcm(3)), "3");
+  assert.equal(await service.transcribeFile(remoteSettings(), pcm(3)), "3");
 
   assert.equal(keys[0], "model-a");
-  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|asr-model\|model-a$/);
+  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|asr-model$/);
   assert.equal(keys.length, 2, "identical remote settings reuse the backend");
   assert.deepEqual(backendTypes, ["transcribe-cpp", "openai-asr"]);
   await service.shutdown();
@@ -541,7 +543,7 @@ test("switching backends unloads the previous backend", async () => {
   }));
 
   await service.transcribeFile(settings("model-a"), pcm(1));
-  await service.transcribeFile(remoteSettings("model-a"), pcm(2));
+  await service.transcribeFile(remoteSettings(), pcm(2));
   assert.deepEqual(events, ["unload:model-a"]);
   await service.shutdown();
 });

@@ -4,7 +4,7 @@ Speech-to-text for Pi — on-device model or OpenAI-compatible remote ASR, with 
 
 Press a keyboard shortcut, talk, and the resulting transcript will be put directly into your chat.
 
-> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) with the local model kept as a fallback, plus compaction-style post-processing that refines a transcript with Pi's own model. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
+> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) in an exclusive local-only or remote-only setup, plus compaction-style post-processing that refines a transcript with Pi's own model. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
 
 ## Install
 
@@ -49,12 +49,13 @@ export OPENAI_API_KEY=sk-...
 
 Behavior:
 
-- **Local model stays as fallback.** If a remote request fails (network, quota, HTTP error, or the API key is unset), the full recording is transcribed with the configured local model instead; the failure is logged to `~/.pi/agent/pi-voice.log`. Aborted/cancelled transcriptions are never retried locally.
+- **Remote-only mode.** Remote settings store no local model: setup skips the model download step, and a failed remote request (network, quota, HTTP error, or an unset API key) surfaces as an error instead of being retried offline. Failures are logged to `~/.pi/agent/pi-voice.log`.
 - **Batch-only.** Remote transcription happens when recording stops (the ASR request carries the whole clip), so there is no streaming preview.
-- **16 kHz mono WAV** is uploaded as a base64 data URL.
-- Switching back to **Local model** restores the original behavior; the local model is still required either way (it is the fallback and file transcription still needs it).
+- **16 kHz mono WAV** is uploaded as a base64 WAV data URL.
+- **Exclusive modes.** Switching **Transcription backend** to **Local model** asks you to pick a model first; switching to **Remote ASR** drops the local model from settings. The **Model** and **Transcription language** settings rows appear only in local mode.
+- `transcribe_file` uses whichever mode is configured — in remote mode the file audio is sent to the endpoint instead of a local model.
 
-Transcripts still go through the **Chinese output** script conversion preference; because a remote response carries no detected language, Han characters in the transcript are what trigger the conversion when the language is set to automatic.
+Transcripts still go through the **Chinese output** script conversion preference; because a remote response carries no detected language, Han characters in the transcript are what trigger the conversion when the language is set to automatic. The **Chinese output** row stays reachable in remote mode, since the endpoint can always produce Chinese.
 
 ## Post-processing (compaction-style refinement)
 
@@ -111,9 +112,20 @@ export PI_VOICE_FFMPEG_PATH=/path/to/ffmpeg
 
 The legacy `PI_TRANSCRIBE_FFMPEG_PATH` variable remains supported when `PI_VOICE_FFMPEG_PATH` is not set.
 
-When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance to the agent. The agent should ask before running a package-manager command. Model setup is still explicit: run `/voice-settings` once in the interactive TUI to choose and, after confirmation, download a local model.
+When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance to the agent. The agent should ask before running a package-manager command. Model setup is still explicit: run `/voice-settings` once in the interactive TUI to choose a mode and, in local mode, confirm the download of a local model.
 
 ## Changelog
+
+### 0.5.0
+
+**Changed — Exclusive local / remote modes (no fallback)**
+
+- Local and remote transcription are now mutually exclusive: remote settings store no local model, and selecting a local model drops any remote configuration. Settings files with both are normalized to remote-only on read.
+- First-run setup in remote mode skips the model step entirely; no local model is downloaded (onboarding jumps from step 2 to step 4, the Try it pane).
+- Removed the local fallback for remote ASR. Network, quota, HTTP, and unset-API-key failures now surface directly and are logged to `~/.pi/agent/pi-voice.log`.
+- The settings menu hides the **Model** and **Transcription language** rows in remote mode and always shows **Chinese output** there; switching the backend to local asks you to pick a model first, and switching to remote clears the local model.
+- Try it shows a **Local model** row in remote mode; choosing a model from it switches setup to local mode.
+- `transcribe_file` works in either mode and reports the remote model name in its details when remote.
 
 ### 0.4.0
 

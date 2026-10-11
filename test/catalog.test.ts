@@ -29,7 +29,7 @@ test("an unknown saved model requests reconfiguration without rewriting settings
   });
 
   const current = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model");
-  const saved = { ...current, model: { ...current.model, id: "retired-model" } };
+  const saved = { ...current, model: { ...current.model!, id: "retired-model" } };
   await writeSettings(saved);
 
   const result = await readSettings();

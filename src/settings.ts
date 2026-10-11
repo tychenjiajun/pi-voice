@@ -21,8 +21,8 @@ export type ChineseOutput = "simplified" | "traditional-taiwan" | "traditional-h
 /**
  * Where recordings are transcribed. `transcribe-cpp` runs a local catalog
  * model; `openai-asr` uploads to any OpenAI-compatible chat-completions ASR
- * endpoint via the `input_audio` content block. The local catalog model stays
- * configured in both cases and acts as the fallback when the remote call fails.
+ * endpoint via the `input_audio` content block. The two are exclusive: remote
+ * mode stores no local model, and local mode has no remote configuration.
  */
 export type BackendSettings =
   | { type: "transcribe-cpp" }
@@ -57,7 +57,11 @@ export type TranscribeSettings = {
   polishEnabled?: boolean;
   /** Optional post-processing model override; absent uses the agent's current model. */
   polishModel?: PolishModelRef;
-  model: {
+  /**
+   * The local catalog model. Present only in local mode (backend
+   * `transcribe-cpp`); remote mode stores no local model.
+   */
+  model?: {
     source: "catalog";
     id: string;
     path: string;
@@ -164,6 +168,17 @@ function normalizePolishModel(value: unknown): PolishModelRef | undefined {
   return { provider: value.provider.trim(), id: value.id.trim() };
 }
 
+function validateModelValue(
+  value: unknown,
+): { id: string; path: string; catalogModel: CatalogModel } | undefined {
+  if (!isObject(value) || value.source !== "catalog") return undefined;
+  if (typeof value.id !== "string") return undefined;
+  const catalogModel = getCatalogModel(value.id);
+  if (!catalogModel) return undefined;
+  if (typeof value.path !== "string" || value.path.length === 0) return undefined;
+  return { id: value.id, path: value.path, catalogModel };
+}
+
 function validateSettings(value: unknown): TranscribeSettings | undefined {
   if (!isObject(value) || value.version !== SETTINGS_VERSION) return undefined;
   const backend = validateBackend(value.backend);
@@ -171,36 +186,43 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
   const shortcut =
     typeof value.shortcut === "string" ? normalizeShortcut(value.shortcut) : undefined;
   if (!shortcut) return undefined;
-  if (!isObject(value.model) || value.model.source !== "catalog") return undefined;
-  if (typeof value.model.id !== "string") return undefined;
-  const model = getCatalogModel(value.model.id);
-  if (!model) return undefined;
-  if (typeof value.model.path !== "string" || value.model.path.length === 0) return undefined;
+
+  const selected = validateModelValue(value.model);
+  // Local mode needs a model; remote mode drops any leftover local model so
+  // settings are ever either local-only or remote-only, never both.
+  if (backend.type === "transcribe-cpp" && !selected) return undefined;
 
   const preferredLanguages = normalizeLanguages(value.preferredLanguages);
   const microphone = validateMicrophone(value.microphone);
   if (!preferredLanguages || !microphone) return undefined;
   const polishModel = normalizePolishModel(value.polishModel);
 
+  // The remote endpoint detects the language itself; the stored language only
+  // triggers Chinese script conversion, so any previous value is kept as-is.
+  const transcriptionLanguage =
+    backend.type === "openai-asr"
+      ? typeof value.transcriptionLanguage === "string" && value.transcriptionLanguage
+        ? value.transcriptionLanguage
+        : "auto"
+      : transcriptionLanguageForModel(
+          value.transcriptionLanguage,
+          selected!.catalogModel,
+          preferredLanguages,
+        );
+
   return {
     version: SETTINGS_VERSION,
     backend,
     shortcut,
     preferredLanguages,
-    transcriptionLanguage: transcriptionLanguageForModel(
-      value.transcriptionLanguage,
-      model,
-      preferredLanguages,
-    ),
+    transcriptionLanguage,
     chineseOutput: validateChineseOutput(value.chineseOutput),
     microphone,
     polishEnabled: value.polishEnabled === true,
     ...(polishModel ? { polishModel } : {}),
-    model: {
-      source: "catalog",
-      id: value.model.id,
-      path: value.model.path,
-    },
+    ...(backend.type === "transcribe-cpp"
+      ? { model: { source: "catalog" as const, id: selected!.id, path: selected!.path } }
+      : {}),
   };
 }
 
@@ -262,7 +284,10 @@ type ModelSettingsOptions = {
   transcriptionLanguage?: TranscriptionLanguage;
   chineseOutput?: ChineseOutput;
   microphone?: MicrophoneSetting;
-  /** Preserved across model re-selection; defaults to the local backend. */
+  /**
+   * Preserved across model re-selection when local; picking a model always
+   * yields local-only settings, since the backends are exclusive.
+   */
   backend?: BackendSettings;
   /** Preserved across model re-selection; defaults to disabled. */
   polishEnabled?: boolean;
@@ -282,7 +307,11 @@ export function settingsForModel(
   ];
   return {
     version: SETTINGS_VERSION,
-    backend: options.backend ?? { type: "transcribe-cpp" },
+    // Exclusive modes: a selected local model drops any remote configuration.
+    backend:
+      options.backend && options.backend.type === "transcribe-cpp"
+        ? options.backend
+        : { type: "transcribe-cpp" },
     shortcut: options.shortcut ?? DEFAULT_SHORTCUT,
     preferredLanguages,
     transcriptionLanguage: transcriptionLanguageForModel(
@@ -296,4 +325,34 @@ export function settingsForModel(
     ...(options.polishModel ? { polishModel: options.polishModel } : {}),
     model: { source: "catalog", id: modelId, path: modelPath },
   };
+}
+
+type RemoteSettingsOptions = Omit<ModelSettingsOptions, "backend"> & {
+  backend: Extract<BackendSettings, { type: "openai-asr" }>;
+};
+
+/** Remote-only settings: no local model is stored, so the endpoint is the sole backend. */
+export function settingsRemoteOnly(options: RemoteSettingsOptions): TranscribeSettings {
+  const preferredLanguages = [
+    ...new Set((options.preferredLanguages ?? ["en"]).map(languageIdentity)),
+  ];
+  return {
+    version: SETTINGS_VERSION,
+    backend: options.backend,
+    shortcut: options.shortcut ?? DEFAULT_SHORTCUT,
+    preferredLanguages,
+    // The endpoint detects the language itself; "auto" keeps the stored value
+    // from triggering Chinese conversion against a language that is not there.
+    transcriptionLanguage: options.transcriptionLanguage ?? "auto",
+    chineseOutput: options.chineseOutput ?? defaultChineseOutput(),
+    microphone: { ...(options.microphone ?? DEFAULT_MICROPHONE) },
+    polishEnabled: options.polishEnabled ?? false,
+    ...(options.polishModel ? { polishModel: options.polishModel } : {}),
+  };
+}
+
+/** The configured transcription source: local model id, or the remote ASR model name. */
+export function transcriptionModelLabel(settings: TranscribeSettings): string {
+  if (settings.model) return settings.model.id;
+  return settings.backend.type === "openai-asr" ? settings.backend.model : "none";
 }

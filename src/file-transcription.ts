@@ -12,7 +12,7 @@ import { basename, join, resolve } from "node:path";
 import { Type } from "typebox";
 import { AsyncLimiter } from "./async-limiter.js";
 import { polishTranscript } from "./polish.js";
-import type { TranscribeSettings } from "./settings.js";
+import { transcriptionModelLabel, type TranscribeSettings } from "./settings.js";
 import type { TranscriptionService } from "./transcription-service.js";
 
 const CONTEXT_LINE_LENGTH = 1_000;
@@ -84,7 +84,7 @@ export function registerFileTranscriptionTool(
   pi.registerTool({
     name: "transcribe_file",
     label: "Transcribe File",
-    description: `Transcribe speech from a local audio or video file using Pi Voice's configured transcription backend (local model, or the configured remote ASR endpoint with the local model as fallback), then applies Pi Voice's compaction-style post-processing when it is enabled. Requires the ffmpeg executable on PATH (or PI_VOICE_FFMPEG_PATH). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; a complete transcript is saved to a temporary file when needed.`,
+    description: `Transcribe speech from a local audio or video file using Pi Voice's configured transcription backend (local model or remote ASR endpoint), then applies Pi Voice's compaction-style post-processing when it is enabled. Requires the ffmpeg executable on PATH (or PI_VOICE_FFMPEG_PATH). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; a complete transcript is saved to a temporary file when needed.`,
     promptSnippet: "Transcribe speech from local audio or video files",
     promptGuidelines: [
       "Use transcribe_file when speech in a local audio or video file needs to be read, analyzed, or transcribed.",
@@ -118,10 +118,11 @@ export function registerFileTranscriptionTool(
 
           const configured = await options.getSettings();
           const service = await options.getService();
+          const modelLabel = transcriptionModelLabel(configured);
           if (fileOperations.saturated) {
             onUpdate?.({
               content: [{ type: "text", text: "Waiting for file transcription capacity…" }],
-              details: { inputPath, modelId: configured.model.id, seconds: 0 },
+              details: { inputPath, modelId: modelLabel, seconds: 0 },
             });
           }
 
@@ -129,13 +130,13 @@ export function registerFileTranscriptionTool(
             if (fileDecoders.saturated) {
               onUpdate?.({
                 content: [{ type: "text", text: `Waiting to decode ${basename(inputPath)}…` }],
-                details: { inputPath, modelId: configured.model.id, seconds: 0 },
+                details: { inputPath, modelId: modelLabel, seconds: 0 },
               });
             }
             const audio = await fileDecoders.run(async () => {
               onUpdate?.({
                 content: [{ type: "text", text: `Decoding ${basename(inputPath)} with FFmpeg…` }],
-                details: { inputPath, modelId: configured.model.id, seconds: 0 },
+                details: { inputPath, modelId: modelLabel, seconds: 0 },
               });
               const { decodeFileAudio } = await import("./file-audio.js");
               return decodeFileAudio(inputPath, operationSignal);
@@ -150,7 +151,7 @@ export function registerFileTranscriptionTool(
               ],
               details: {
                 inputPath,
-                modelId: configured.model.id,
+                modelId: modelLabel,
                 seconds: audio.seconds,
               },
             });
@@ -170,7 +171,7 @@ export function registerFileTranscriptionTool(
               : rawTranscript;
             const details: FileTranscriptionDetails = {
               inputPath,
-              modelId: configured.model.id,
+              modelId: modelLabel,
               seconds: audio.seconds,
             };
 

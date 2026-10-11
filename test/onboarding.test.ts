@@ -13,6 +13,7 @@ import { CATALOG_MODELS } from "../src/catalog.js";
 import { recommendModels } from "../src/recommendations.js";
 import { readSettings, settingsForModel, writeSettings } from "../src/settings.js";
 import { SingleSelectPicker } from "../src/ui-components.js";
+import { TryItPane } from "../src/try-it.js";
 import { cacheCatalogModel, isolatedModelCache } from "./model-cache-helper.js";
 import { keybindings, testTheme, testTui } from "./ui-helpers.js";
 
@@ -109,7 +110,7 @@ for (const entry of ["recommended", "other-models", "single-pick"] as const) {
     script.assertFinished();
     assert.ok(result);
     assert.deepEqual(result.preferredLanguages, ["en", "zh"]);
-    assert.equal(result.model.id, expectedModelId);
+    assert.equal(result.model?.id, expectedModelId);
     assert.equal(result.shortcut, current.shortcut);
     assert.deepEqual(result.microphone, current.microphone);
     assert.equal(result.chineseOutput, current.chineseOutput);
@@ -233,12 +234,8 @@ test("exiting first-run languages after a committed selection preserves saved se
   assert.deepEqual((await readSettings()).settings, configured);
 });
 
-test("choosing Remote ASR in first-run setup collects the endpoint and keeps it in settings", async (t) => {
+test("choosing Remote ASR in first-run setup is remote-only with no local model", async (t) => {
   isolatedSettings(t);
-  const cache = isolatedModelCache(t);
-  for (const pick of recommendModels(CATALOG_MODELS, ["en"])) {
-    cacheCatalogModel(cache, pick.model);
-  }
   const apiKeyEnv = "PI_VOICE_TEST_ASR_KEY";
   process.env[apiKeyEnv] = "test-key";
   t.after(() => { delete process.env[apiKeyEnv]; });
@@ -252,14 +249,10 @@ test("choosing Remote ASR in first-run setup collects the endpoint and keeps it 
     (_pane, done) => done("whisper-test"),
     (_pane, done) => done(apiKeyEnv),
     (_pane, done) => done({ languages: ["en"], confirmed: true }),
+    // Remote mode skips the model step entirely and goes straight to Try it.
     (pane) => {
-      assert.ok(pane instanceof RecommendedModelPicker);
-      pane.handleInput("\r");
+      assert.ok(pane instanceof TryItPane);
       pane.handleInput("\x1b");
-    },
-    (pane, done) => {
-      assert.ok(pane instanceof LanguagePicker);
-      done(undefined);
     },
   ]);
   const configured = await runOnboarding(script.ctx);
@@ -271,6 +264,7 @@ test("choosing Remote ASR in first-run setup collects the endpoint and keeps it 
     model: "whisper-test",
     apiKeyEnv,
   });
+  assert.equal(configured.model, undefined, "remote mode stores no local model");
   assert.deepEqual((await readSettings()).settings, configured);
 });
 

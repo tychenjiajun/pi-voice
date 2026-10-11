@@ -59,13 +59,22 @@ type BackendFactory = (
   settings: TranscribeSettings,
 ) => ReusableBackend | Promise<ReusableBackend>;
 
-/** Local backends key on the model file; remote adds its endpoint identity. */
+/** Local backends key on the model file; remote keys on endpoint identity. */
+function requireLocalModel(settings: TranscribeSettings): { path: string } {
+  if (!settings.model) {
+    throw new Error(
+      "No local model is configured. Run /voice-settings and choose a local model, or switch the transcription backend to remote ASR.",
+    );
+  }
+  return settings.model;
+}
+
 function backendKeyFor(settings: TranscribeSettings): string {
   if (settings.backend.type === "openai-asr") {
     const { baseUrl, model } = settings.backend;
-    return `openai-asr:${baseUrl}|${model}|${settings.model.path}`;
+    return `openai-asr:${baseUrl}|${model}`;
   }
-  return settings.model.path;
+  return requireLocalModel(settings).path;
 }
 
 function abortError(signal: AbortSignal): Error {
@@ -104,19 +113,12 @@ export class TranscriptionService {
 
   constructor(
     private readonly createBackend: BackendFactory = async (_key, settings) => {
-      const { TranscribeCppBackend } = await import("./transcription.js");
       if (settings.backend.type === "openai-asr") {
         const { OpenAIAsrBackend } = await import("./openai-asr.js");
-        const modelPath = settings.model.path;
-        return new OpenAIAsrBackend(settings.backend, {
-          createFallback: async () => {
-            const local = new TranscribeCppBackend(modelPath);
-            await local.prepare();
-            return local;
-          },
-        });
+        return new OpenAIAsrBackend(settings.backend);
       }
-      return new TranscribeCppBackend(settings.model.path);
+      const { TranscribeCppBackend } = await import("./transcription.js");
+      return new TranscribeCppBackend(requireLocalModel(settings).path);
     },
   ) {}
 

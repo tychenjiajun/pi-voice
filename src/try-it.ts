@@ -116,7 +116,10 @@ export class TryItPane implements Component {
 
     const state = this.dictation.state;
     const shortcut = displayShortcut(this.settings.shortcut);
-    const modelName = getCatalogModel(this.settings.model.id)?.name ?? this.settings.model.id;
+    const localModel = this.settings.model;
+    const modelName = localModel
+      ? getCatalogModel(localModel.id)?.name ?? localModel.id
+      : "Not installed (remote mode)";
     const title = "Try it";
     const fg = (color: Parameters<UiTheme["fg"]>[0], text: string) => this.theme.fg(color, text);
     const text = (value: string) => new Text(value, PANEL_PADDING, 0).render(width);
@@ -132,7 +135,8 @@ export class TryItPane implements Component {
       });
     } else if (
       (state.phase === "idle" || state.phase === "ready") &&
-      this.dictation.modelState === "loading"
+      this.dictation.modelState === "loading" &&
+      localModel
     ) {
       activity = fg("muted", `Loading ${modelName}… You can start recording now.`);
     } else if (state.phase === "transcribing") {
@@ -147,7 +151,7 @@ export class TryItPane implements Component {
       activity = fg("muted", formatTranscriptionSummary(speechSeconds, transcribeSeconds));
       if (interruption) {
         details = fg("warning", `The microphone stopped after ${speechSeconds.toFixed(1)}s: ${interruption.message}`);
-      } else if (needsFasterModel(speechSeconds, transcribeSeconds)) {
+      } else if (localModel && needsFasterModel(speechSeconds, transcribeSeconds)) {
         details = fg("warning", `Slow on this machine? Press ${this.keys.keyText("voice.tryIt.model")} to try another model.`);
       }
     } else if (state.phase === "error") {
@@ -209,7 +213,7 @@ export class TryItPane implements Component {
         ...render(setting("Shortcut", shortcut, this.keys.keyText("voice.tryIt.shortcut"), compact)),
         ...render(setting("Microphone", microphoneSummary(this.settings.microphone), this.keys.keyText("voice.tryIt.microphone"), compact)),
         ...render(setting(
-          this.settings.backend.type === "openai-asr" ? "Fallback" : "Model",
+          localModel ? "Model" : "Local model",
           modelName,
           this.keys.keyText("voice.tryIt.model"),
           compact,

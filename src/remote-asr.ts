@@ -26,7 +26,7 @@ export async function chooseBackendType(
       value: "openai-asr",
       label: "Remote ASR (OpenAI-compatible)",
       description:
-        "Upload audio to any OpenAI-compatible chat-completions ASR endpoint; falls back to the local model if the request fails",
+        "Upload audio to any OpenAI-compatible chat-completions ASR endpoint; no local model is used",
     },
   ];
   return ctx.ui.custom<BackendType | undefined>((tui, theme, keybindings, done) =>
@@ -74,11 +74,11 @@ function remoteBackendsEqual(
   );
 }
 
-/** Warn when the named variable is unset, so remote calls silently fall back to local. */
+/** Warn when the named variable is unset, so remote calls fail until it is set. */
 export function warnMissingApiKey(ctx: ExtensionContext, apiKeyEnv: string): void {
   if (process.env[apiKeyEnv]) return;
   ctx.ui.notify(
-    `${apiKeyEnv} is not set in Pi's environment; remote transcription will fall back to the local model until it is set`,
+    `${apiKeyEnv} is not set in Pi's environment; remote transcription will fail until it is set`,
     "warning",
   );
 }
