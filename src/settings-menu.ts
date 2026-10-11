@@ -2,11 +2,10 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Box, Container, Input, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { microphonePermission, type Permission } from "./audio.js";
 import { displayLanguage, getCatalogModel } from "./catalog.js";
 import { chineseOutputSummary, isChineseLanguage } from "./chinese.js";
-import { VoiceKeys } from "./keybindings.js";
 import {
   chooseLanguages,
   createTranscriptionLanguagePicker,
@@ -18,6 +17,7 @@ import {
   microphoneSummary,
 } from "./microphone-picker.js";
 import { runModelSelection } from "./onboarding.js";
+import { chooseBackendType, promptRemoteBackend, warnMissingApiKey } from "./remote-asr.js";
 import {
   writeSettings,
   type BackendSettings,
@@ -30,9 +30,7 @@ import {
 import { displayShortcut } from "./shortcut-core.js";
 import { createShortcutPicker } from "./shortcuts.js";
 import {
-  LIST_PADDING,
   padToWidth,
-  panelBorder,
   SingleSelectPicker,
   type SingleSelectChoice,
 } from "./ui-components.js";
@@ -43,7 +41,7 @@ const SETTINGS_LABEL_WIDTH = 25;
 // Text padding (2), cursor gutter (2), label column, and its gap (2).
 const SETTINGS_ROW_OVERHEAD = SETTINGS_LABEL_WIDTH + 6;
 
-type SettingsAction =
+export type SettingsAction =
   | "preferred-languages"
   | "model"
   | "backend"
@@ -53,7 +51,7 @@ type SettingsAction =
   | "microphone"
   | "shortcut";
 
-type SettingsHomeChoice = SingleSelectChoice<SettingsAction> & {
+export type SettingsHomeChoice = SingleSelectChoice<SettingsAction> & {
   summary: string;
   /** Render the summary in the error color. */
   alert?: boolean;
@@ -98,7 +96,7 @@ function polishSummary(polishEnabled: boolean | undefined, model: PolishModelRef
   return model ? `${model.provider}/${model.id}` : "Pi's current model";
 }
 
-function settingsHomeChoices(
+export function settingsHomeChoices(
   configured: TranscribeSettings,
   permission: Permission,
 ): SettingsHomeChoice[] {
@@ -134,13 +132,23 @@ function settingsHomeChoices(
       value: "transcription-language",
       label: "Transcription language",
       summary: transcriptionLanguageSummary(configured.transcriptionLanguage, model),
-      description: "Language expected in recordings, or automatic detection when supported",
+      description:
+        configured.backend.type === "openai-asr"
+          ? "Used by the local fallback and Chinese output conversion; the remote endpoint detects the language itself"
+          : "Language expected in recordings, or automatic detection when supported",
     },
   ];
 
+  // Chinese script conversion applies when the configured language is Chinese,
+  // when a preferred language is Chinese, or when a detecting model can pick
+  // Chinese on its own. Gating only on the first two leaves the row unreachable
+  // for anyone relying on auto-detection.
+  const detectsChinese =
+    model.capabilities.languageDetection && model.languages.some(isChineseLanguage);
   if (
     isChineseLanguage(configured.transcriptionLanguage) ||
-    configured.preferredLanguages.some(isChineseLanguage)
+    configured.preferredLanguages.some(isChineseLanguage) ||
+    detectsChinese
   ) {
     choices.push({
       value: "chinese-output",
@@ -280,145 +288,6 @@ async function chooseShortcut(
   );
 }
 
-/**
- * Single-field text prompt built on pi-tui's Input. Empty input may be legal
- * (the caller decides via validate); Escape backs out of the whole flow.
- */
-function promptText(
-  ctx: ExtensionContext,
-  options: {
-    title: string;
-    description?: string;
-    value: string;
-    placeholder?: string;
-    validate?: (value: string) => string | undefined;
-  },
-): Promise<string | undefined> {
-  return ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) => {
-    const keys = new VoiceKeys(keybindings);
-    const input = new Input();
-    input.setValue(options.value);
-    let error: string | undefined;
-    const container = new Container();
-
-    const rebuild = (): void => {
-      container.clear();
-      container.addChild(panelBorder(theme));
-      container.addChild(new Spacer(1));
-      container.addChild(new Text(theme.fg("accent", theme.bold(options.title)), 1, 0));
-      if (options.description) {
-        container.addChild(new Text(theme.fg("muted", options.description), 1, 0));
-      }
-      container.addChild(new Spacer(1));
-      if (error) {
-        container.addChild(new Text(theme.fg("error", error), 1, 0));
-        container.addChild(new Spacer(1));
-      }
-      if (!input.getValue() && options.placeholder) {
-        container.addChild(new Text(theme.fg("dim", options.placeholder), 2, 0));
-      }
-      const inputBox = new Box(LIST_PADDING, 0);
-      inputBox.addChild(input);
-      container.addChild(inputBox);
-      container.addChild(new Spacer(1));
-      container.addChild(
-        new Text(
-          `${keys.hint("tui.input.submit", "save")}  ${keys.hint("tui.select.cancel", "back")}`,
-          1,
-          0,
-        ),
-      );
-      container.addChild(new Spacer(1));
-      container.addChild(panelBorder(theme));
-    };
-    rebuild();
-
-    input.onSubmit = (value) => {
-      const problem = options.validate?.(value.trim());
-      if (problem) {
-        error = problem;
-        rebuild();
-        tui.requestRender();
-        return;
-      }
-      done(value.trim());
-    };
-    input.onEscape = () => done(undefined);
-
-    return {
-      get focused() {
-        return input.focused;
-      },
-      set focused(value: boolean) {
-        input.focused = value;
-      },
-      render(width: number): string[] {
-        return container
-          .render(width)
-          .map((line) => truncateToWidth(line, width, ""));
-      },
-      handleInput(data: string): void {
-        input.handleInput(data);
-      },
-      invalidate(): void {
-        container.invalidate();
-      },
-    };
-  });
-}
-
-async function chooseBackendType(
-  ctx: ExtensionContext,
-  current: BackendSettings,
-): Promise<"transcribe-cpp" | "openai-asr" | undefined> {
-  const choices: SingleSelectChoice<"transcribe-cpp" | "openai-asr">[] = [
-    {
-      value: "transcribe-cpp",
-      label: "Local model",
-      description: "Transcribe fully on-device with the downloaded model; works offline",
-    },
-    {
-      value: "openai-asr",
-      label: "Remote ASR (OpenAI-compatible)",
-      description:
-        "Upload audio to any OpenAI-compatible chat-completions ASR endpoint; falls back to the local model if the request fails",
-    },
-  ];
-  return ctx.ui.custom<"transcribe-cpp" | "openai-asr" | undefined>(
-    (tui, theme, keybindings, done) =>
-      new SingleSelectPicker(
-        tui,
-        theme,
-        keybindings,
-        choices,
-        current.type,
-        { title: "Transcription backend", cancelLabel: "back" },
-        done,
-      ),
-  );
-}
-
-function validateBaseUrl(value: string): string | undefined {
-  if (!value) return "Base URL is required";
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return "Base URL must start with http:// or https://";
-    }
-  } catch {
-    return "Base URL must be a valid URL";
-  }
-  return undefined;
-}
-
-function validateEnvName(value: string): string | undefined {
-  if (!value) return "Environment variable name is required";
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
-    return "Use a plain environment variable name, e.g. OPENAI_API_KEY";
-  }
-  return undefined;
-}
-
 /** Backend row flow: pick the type, then collect remote settings step by step. */
 async function editBackend(
   ctx: ExtensionContext,
@@ -438,53 +307,16 @@ async function editBackend(
 
   const current =
     configured.backend.type === "openai-asr" ? configured.backend : undefined;
-  const baseUrl = await promptText(ctx, {
-    title: "ASR base URL",
-    description: "OpenAI-compatible endpoint root, without the /chat/completions path",
-    value: current?.baseUrl ?? "",
-    placeholder: "https://api.example.com/v1",
-    validate: validateBaseUrl,
-  });
-  if (baseUrl === undefined) return false;
+  const backend = await promptRemoteBackend(ctx, current);
+  if (!backend) return false;
 
-  const model = await promptText(ctx, {
-    title: "ASR model",
-    value: current?.model ?? "",
-    placeholder: "whisper-1",
-    validate: (value) => (value ? undefined : "Model name is required"),
-  });
-  if (model === undefined) return false;
-
-  const apiKeyEnv = await promptText(ctx, {
-    title: "API key environment variable",
-    description: "The key itself is read from this variable at runtime; it is never stored in settings",
-    value: current?.apiKeyEnv ?? "",
-    placeholder: "OPENAI_API_KEY",
-    validate: validateEnvName,
-  });
-  if (apiKeyEnv === undefined) return false;
-
-  const backend: BackendSettings = { type: "openai-asr", baseUrl, model, apiKeyEnv };
-  if (
-    current &&
-    current.baseUrl === baseUrl &&
-    current.model === model &&
-    current.apiKeyEnv === apiKeyEnv
-  ) {
-    return false;
-  }
   const saved = await saveUpdatedSettings(
     ctx,
     configured,
     { ...configured, backend },
-    `Remote ASR configured (${model})`,
+    `Remote ASR configured (${backend.model})`,
   );
-  if (saved && !process.env[apiKeyEnv]) {
-    ctx.ui.notify(
-      `${apiKeyEnv} is not set in Pi's environment; remote transcription will fall back to the local model until it is set`,
-      "warning",
-    );
-  }
+  if (saved) warnMissingApiKey(ctx, backend.apiKeyEnv);
   return saved;
 }
 

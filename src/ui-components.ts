@@ -37,7 +37,7 @@ export function onboardingHeader(
   theme: UiTheme,
   title: string,
   step: number,
-  total = 3,
+  total = 4,
 ): Component {
   const context = `Pi Voice setup · ${step} of ${total}`;
   const compactContext = `${step} of ${total}`;
@@ -217,6 +217,8 @@ export class SingleSelectPicker<T extends string> extends Container implements F
       searchable?: boolean;
       maximumVisible?: number;
       cancelLabel?: string;
+      /** Adds setup context and progress to the title. */
+      onboardingStep?: number;
       /** Extra footer legend, appended after the ✓ current marker. */
       legend?: string;
       /** Custom row body after the cursor and ✓ markers; handles its own active styling. */
@@ -245,7 +247,11 @@ export class SingleSelectPicker<T extends string> extends Container implements F
 
     this.addChild(panelBorder(theme));
     this.addChild(new Spacer(1));
-    this.addChild(this.titleText);
+    if (typeof options.onboardingStep === "number") {
+      this.addChild(onboardingHeader(theme, options.title, options.onboardingStep));
+    } else {
+      this.addChild(this.titleText);
+    }
     if (this.subtitleText) this.addChild(this.subtitleText);
     this.addChild(new Spacer(1));
     if (options.searchable) {

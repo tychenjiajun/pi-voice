@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { CAPTURE_SAMPLE_RATE } from "./audio-constants.js";
-import { convertChineseOutput, isChineseLanguage } from "./chinese.js";
+import { containsChineseCharacters, convertChineseOutput, isChineseLanguage } from "./chinese.js";
 import { describeError, writeLog } from "./log.js";
 import type { BackendSettings, ChineseOutput } from "./settings.js";
 import type {
@@ -122,15 +122,15 @@ function createOpenAITransport(config: OpenAIAsrSettings): {
 /**
  * Trims, then applies the Chinese script preference exactly like the local
  * backend. The chat-completions response carries no detected language, so
- * this mirrors the local `finishTranscript` with detectedLanguage = "" —
- * conversion runs only when the configured language is Chinese.
+ * Chinese is inferred from the text itself: Han characters mean the transcript
+ * is Chinese and the preference applies, matching local models that detect it.
  */
 export async function finishRemoteTranscript(
   text: string,
   options: TranscriptionOptions,
 ): Promise<string> {
   const trimmed = text.trim();
-  return isChineseLanguage(options.language ?? "")
+  return isChineseLanguage(options.language ?? "") || containsChineseCharacters(trimmed)
     ? convertChineseOutput(trimmed, options.chineseOutput ?? "simplified")
     : trimmed;
 }

@@ -12,6 +12,7 @@ import { RecommendedModelPicker } from "../src/recommendation-picker.js";
 import { CATALOG_MODELS } from "../src/catalog.js";
 import { recommendModels } from "../src/recommendations.js";
 import { readSettings, settingsForModel, writeSettings } from "../src/settings.js";
+import { SingleSelectPicker } from "../src/ui-components.js";
 import { cacheCatalogModel, isolatedModelCache } from "./model-cache-helper.js";
 import { keybindings, testTheme, testTui } from "./ui-helpers.js";
 
@@ -213,6 +214,10 @@ test("exiting first-run languages after a committed selection preserves saved se
     cacheCatalogModel(cache, pick.model);
   }
   const script = scriptedContext([
+    (pane, done) => {
+      assert.ok(pane instanceof SingleSelectPicker);
+      done("local");
+    },
     (_pane, done) => done({ languages: ["en"], confirmed: true }),
     (pane) => {
       assert.ok(pane instanceof RecommendedModelPicker);
@@ -228,8 +233,50 @@ test("exiting first-run languages after a committed selection preserves saved se
   assert.deepEqual((await readSettings()).settings, configured);
 });
 
+test("choosing Remote ASR in first-run setup collects the endpoint and keeps it in settings", async (t) => {
+  isolatedSettings(t);
+  const cache = isolatedModelCache(t);
+  for (const pick of recommendModels(CATALOG_MODELS, ["en"])) {
+    cacheCatalogModel(cache, pick.model);
+  }
+  const apiKeyEnv = "PI_VOICE_TEST_ASR_KEY";
+  process.env[apiKeyEnv] = "test-key";
+  t.after(() => { delete process.env[apiKeyEnv]; });
+
+  const script = scriptedContext([
+    (pane, done) => {
+      assert.ok(pane instanceof SingleSelectPicker);
+      done("remote");
+    },
+    (_pane, done) => done("https://asr.example.com/v1"),
+    (_pane, done) => done("whisper-test"),
+    (_pane, done) => done(apiKeyEnv),
+    (_pane, done) => done({ languages: ["en"], confirmed: true }),
+    (pane) => {
+      assert.ok(pane instanceof RecommendedModelPicker);
+      pane.handleInput("\r");
+      pane.handleInput("\x1b");
+    },
+    (pane, done) => {
+      assert.ok(pane instanceof LanguagePicker);
+      done(undefined);
+    },
+  ]);
+  const configured = await runOnboarding(script.ctx);
+  script.assertFinished();
+  assert.ok(configured);
+  assert.deepEqual(configured.backend, {
+    type: "openai-asr",
+    baseUrl: "https://asr.example.com/v1",
+    model: "whisper-test",
+    apiKeyEnv,
+  });
+  assert.deepEqual((await readSettings()).settings, configured);
+});
+
 test("Escape from the initial recommendation still goes back to languages", async () => {
   const script = scriptedContext([
+    (_pane, done) => done("local"),
     (_pane, done) => done({ languages: ["en"], confirmed: true }),
     (pane) => {
       assert.ok(pane instanceof RecommendedModelPicker);

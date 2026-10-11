@@ -33,6 +33,21 @@ export function isChineseLanguage(language: string): boolean {
   return base === "zh" || base === "yue";
 }
 
+/**
+ * CJK ranges worth converting: Ext A, the main block, compatibility ideographs,
+ * and Ext B+ (surrogate pairs are matched by their lead code unit).
+ */
+const HAN_CHARACTERS = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ud840-\ud87f]/;
+
+/**
+ * Remote ASR reports no detected language, so Chinese output is decided by
+ * looking at the transcript: OpenCC is only worth loading when there is Han
+ * text (or the configured language is Chinese) to convert.
+ */
+export function containsChineseCharacters(text: string): boolean {
+  return HAN_CHARACTERS.test(text);
+}
+
 export async function convertChineseOutput(
   text: string,
   output: ChineseOutput,

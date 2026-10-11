@@ -27,7 +27,7 @@ The extension registers:
 - a configurable terminal shortcut (`Ctrl+Alt+Z` by default) to start and stop recording;
 - `/voice`, which does the same as the shortcut. While recording, `Space` also stops and transcribes, and `Escape` discards;
 - a `transcribe_file` tool that the agent can use to transcribe local audio or video files;
-- `/voice-settings` for preferred languages, model, transcription language, post-processing, microphone, and shortcut settings.
+- `/voice-settings` for preferred languages, model, transcription backend, transcription language, post-processing, microphone, and shortcut settings.
 
 `/transcribe` remains available as a compatibility alias for `/voice-settings`.
 
@@ -35,7 +35,7 @@ The extension registers:
 
 Pi Voice can send audio to a remote ASR service instead of transcribing with the local model. It speaks the OpenAI chat-completions `input_audio` dialect: the recording is uploaded as a base64 WAV data URL and the transcript is read from `choices[0].message.content`. Any endpoint that accepts that shape works.
 
-Set it up in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**. You are asked for:
+Set it up either during first-run setup — `/voice-settings` starts by asking **Local model** or **Remote ASR (OpenAI-compatible)** — or later in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**. You are asked for:
 
 1. **Base URL** — endpoint root, without `/chat/completions`;
 2. **Model** — the model name your endpoint expects;
@@ -54,7 +54,7 @@ Behavior:
 - **16 kHz mono WAV** is uploaded as a base64 data URL.
 - Switching back to **Local model** restores the original behavior; the local model is still required either way (it is the fallback and file transcription still needs it).
 
-Transcripts still go through the **Chinese output** script conversion preference.
+Transcripts still go through the **Chinese output** script conversion preference; because a remote response carries no detected language, Han characters in the transcript are what trigger the conversion when the language is set to automatic.
 
 ## Post-processing (compaction-style refinement)
 
@@ -115,6 +115,25 @@ When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance
 
 ## Changelog
 
+### 0.4.0
+
+**Added — Backend choice in first-run setup**
+
+- `/voice-settings` (and the first shortcut press) now starts by asking **Local model** or **Remote ASR (OpenAI-compatible)**, so the remote backend no longer requires finishing local setup first. A local model is still downloaded as the fallback.
+- The remote endpoint prompts (base URL, model, API-key env var name) are shared by first-run setup and the settings menu.
+
+**Fixed — Settings reachability and remote consistency**
+
+- `/voice-settings` opens the settings menu after recovering a missing model file, instead of returning and making you run the command a second time.
+- **Chinese output** is shown for detecting models that support Chinese, so it is reachable when the transcription language is automatic.
+- Remote transcripts apply the Chinese output preference when the transcript contains Han characters, not only when the configured language is Chinese.
+- Settings and errors no longer assume local-only transcription: the **Transcription language** row explains that a remote endpoint detects the language itself, and the transcription error, `transcribe_file` setup guidance, and Try-it model row describe the remote backend.
+
+**Changed**
+
+- Onboarding progress counts the backend step (1 backend → 2 languages → 3 model → 4 Try it).
+- Try it's **change model** keeps the configured transcription language for the new model.
+
 ### 0.3.0
 
 **Added — Post-processing (compaction-style refinement)**
@@ -133,7 +152,7 @@ First release of `@tychenjiajun/pi-voice` — a fork of [`@earendil-works/pi-voi
 **Added — Remote ASR backend**
 
 - Recordings can be transcribed by any OpenAI-compatible chat-completions ASR endpoint via the `input_audio` content block.
-- Configure in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**: base URL, model, and the *name* of an env var holding the API key (the key itself is never stored in settings).
+- Configure in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**: base URL, model, and the *name* of an env var holding the API key (the key itself is never stored in settings). First-run setup also offers the remote backend directly.
 - Audio is uploaded as a 16 kHz mono WAV base64 data URL. Remote transcription is batch-only (no streaming preview).
 - **Local model fallback:** if a remote request fails (network, quota, HTTP error, or the API key is unset), the full recording is transcribed with the configured local model; the failure is logged to `~/.pi/agent/pi-voice.log`. Aborted/cancelled transcriptions are never retried locally.
 

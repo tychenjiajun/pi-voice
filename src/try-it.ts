@@ -189,7 +189,7 @@ export class TryItPane implements Component {
     const topChrome = (compact: boolean): string[] => [
       ...panelBorder(this.theme).render(width),
       ...(compact ? [] : [""]),
-      ...onboardingHeader(this.theme, title, 3).render(width),
+      ...onboardingHeader(this.theme, title, 4).render(width),
       ...(compact ? [] : [""]),
       ...(compact ? [line(instructions(true))] : text(instructions(false))),
       ...(compact ? [] : [""]),
@@ -208,7 +208,12 @@ export class TryItPane implements Component {
         ...permission,
         ...render(setting("Shortcut", shortcut, this.keys.keyText("voice.tryIt.shortcut"), compact)),
         ...render(setting("Microphone", microphoneSummary(this.settings.microphone), this.keys.keyText("voice.tryIt.microphone"), compact)),
-        ...render(setting("Model", modelName, this.keys.keyText("voice.tryIt.model"), compact)),
+        ...render(setting(
+          this.settings.backend.type === "openai-asr" ? "Fallback" : "Model",
+          modelName,
+          this.keys.keyText("voice.tryIt.model"),
+          compact,
+        )),
         ...(compact ? [] : [""]),
         ...text(hints),
         ...(compact ? [] : [""]),
@@ -230,7 +235,7 @@ export class TryItPane implements Component {
     if (top.length + bottom.length + frameRows + 1 > budget) {
       // Tiny terminals: drop settings, but keep the task and current actions visible.
       top = [
-        ...onboardingHeader(this.theme, title, 3).render(width),
+        ...onboardingHeader(this.theme, title, 4).render(width),
         line(instructions(true)),
       ];
       bottom = [...text(hints), ...panelBorder(this.theme).render(width)];

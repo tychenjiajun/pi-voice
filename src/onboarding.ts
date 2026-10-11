@@ -14,6 +14,7 @@ import {
 } from "./recommendation-picker.js";
 import { CATALOG_MODELS } from "./catalog.js";
 import { recommendModels } from "./recommendations.js";
+import { promptRemoteBackend, warnMissingApiKey } from "./remote-asr.js";
 import { createShortcutPicker } from "./shortcuts.js";
 import { tryVoice } from "./try-it.js";
 import {
@@ -28,6 +29,10 @@ import {
   type TranscriptionLanguage,
 } from "./settings.js";
 import { DEFAULT_SHORTCUT } from "./shortcut-core.js";
+import {
+  SingleSelectPicker,
+  type SingleSelectChoice,
+} from "./ui-components.js";
 
 function requireTui(ctx: ExtensionContext): boolean {
   if (ctx.mode === "tui") return true;
@@ -213,6 +218,7 @@ export async function changeOnboardingModel(
     () => ({
       shortcut: current.shortcut,
       preferredLanguages: languages,
+      transcriptionLanguage: current.transcriptionLanguage,
       microphone: current.microphone,
       chineseOutput: current.chineseOutput,
       backend: current.backend,
@@ -264,11 +270,60 @@ export async function changeOnboardingModel(
   }
 }
 
+export type SetupMode = "local" | "remote";
+
+/**
+ * First screen of first-run setup: on-device model, or a remote ASR endpoint.
+ * A local model is downloaded in both cases because it is the fallback.
+ */
+async function chooseSetupMode(ctx: ExtensionContext): Promise<SetupMode | undefined> {
+  const choices: SingleSelectChoice<SetupMode>[] = [
+    {
+      value: "local",
+      label: "Local model",
+      description: "Transcribe fully on-device; no audio leaves this machine",
+    },
+    {
+      value: "remote",
+      label: "Remote ASR (OpenAI-compatible)",
+      description:
+        "Send audio to an OpenAI-compatible ASR endpoint; a local model is still downloaded as fallback",
+    },
+  ];
+  return ctx.ui.custom<SetupMode | undefined>((tui, theme, keybindings, done) =>
+    new SingleSelectPicker(
+      tui,
+      theme,
+      keybindings,
+      choices,
+      undefined,
+      {
+        title: "Pi Voice setup",
+        subtitle: "How should Pi Voice transcribe your speech?",
+        cancelLabel: "cancel",
+        onboardingStep: 1,
+      },
+      done,
+    ),
+  );
+}
+
 export async function runOnboarding(
   ctx: ExtensionContext,
   shortcut = DEFAULT_SHORTCUT,
 ): Promise<TranscribeSettings | undefined> {
   if (!requireTui(ctx)) return undefined;
+
+  const mode = await chooseSetupMode(ctx);
+  if (!mode) return undefined;
+
+  let backend: BackendSettings | undefined;
+  if (mode === "remote") {
+    backend = await promptRemoteBackend(ctx);
+    if (!backend) return undefined;
+    warnMissingApiKey(ctx, backend.apiKeyEnv);
+  }
+  const usingRemote = backend !== undefined;
 
   let languages = defaultSpokenLanguages();
   // Navigation cannot undo a completed settings commit. Keep it across a
@@ -277,7 +332,7 @@ export async function runOnboarding(
   while (true) {
     const chosen = await chooseLanguages(ctx, languages, {
       cancelLabel: "exit",
-      onboardingStep: 1,
+      onboardingStep: 2,
     });
     if (!chosen?.confirmed) return configured;
     languages = chosen.languages;
@@ -285,7 +340,7 @@ export async function runOnboarding(
     // the real wait on this machine.
     const picks = recommendModels(CATALOG_MODELS, languages);
     const { activate, waitForCommits } = createSettingsActivation(
-      () => ({ shortcut, preferredLanguages: languages }),
+      () => ({ shortcut, preferredLanguages: languages, backend }),
       (settings) => {
         configured = settings;
       },
@@ -298,7 +353,10 @@ export async function runOnboarding(
         languages,
         picks,
         activate,
-        { onboardingStep: 2 },
+        {
+          onboardingStep: 3,
+          ...(usingRemote ? { title: "Choose the local fallback model" } : {}),
+        },
       );
       await waitForCommits();
       if (!recommendation) return configured;
@@ -314,8 +372,8 @@ export async function runOnboarding(
         postActivation: "advance",
         onActivate: activate,
         cancelLabel: "back",
-        onboardingStep: 2,
-        title: "Browse all models",
+        onboardingStep: 3,
+        title: usingRemote ? "Choose the local fallback model" : "Browse all models",
       });
       await waitForCommits();
       if (selection?.type === "complete" && configured) {

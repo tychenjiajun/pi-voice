@@ -65,12 +65,12 @@ test("finishRemoteTranscript trims and applies the Chinese output preference", a
   const simplified = await finishRemoteTranscript("  简体中文  ", options);
   assert.equal(simplified, "簡體中文");
 
-  // No configured language: no conversion, mirroring the local path which
-  // has no detected language to act on here.
-  const unconfigured = await finishRemoteTranscript("简体中文", {
+  // No configured language: remote ASR reports none, so Han characters in the
+  // transcript decide — matching local models that detect Chinese themselves.
+  const detected = await finishRemoteTranscript("简体中文", {
     chineseOutput: "traditional-taiwan",
   });
-  assert.equal(unconfigured, "简体中文");
+  assert.equal(detected, "簡體中文");
 
   const english = await finishRemoteTranscript("  hello world  ", {});
   assert.equal(english, "hello world");

@@ -48,7 +48,7 @@ function captureErrorMessage(error: unknown): string {
 
 function transcriptionErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return `Local transcription failed: ${message}`;
+  return `Transcription failed: ${message}`;
 }
 
 export function createPiVoiceRuntime(
@@ -189,12 +189,12 @@ export function createPiVoiceRuntime(
     await loadSettingsOnce();
     if (settingsReadWarning && !settings) {
       throw new Error(
-        `${settingsReadWarning} Ask the user to run /voice-settings in Pi's interactive TUI to configure a local model, then retry transcribe_file.`,
+        `${settingsReadWarning} Ask the user to run /voice-settings in Pi's interactive TUI to set up Pi Voice (a local model, and optionally a remote ASR endpoint), then retry transcribe_file.`,
       );
     }
     if (!settings) {
       throw new Error(
-        "Pi Voice is not configured. Ask the user to run /voice-settings in Pi's interactive TUI once to choose and download a local model, then retry transcribe_file.",
+        "Pi Voice is not configured. Ask the user to run /voice-settings in Pi's interactive TUI once to set up Pi Voice (choose and download a local model, and optionally a remote ASR endpoint), then retry transcribe_file.",
       );
     }
     if (!existsSync(settings.model.path)) {
@@ -458,15 +458,17 @@ export function createPiVoiceRuntime(
     let reload = false;
     await runExclusive(ctx, async () => {
       await loadSettingsOnce();
-      const hadConfiguration = Boolean(settings && existsSync(settings.model.path));
-      const { configured } = await ensureSettings(ctx);
+      const { configured, completedFirstRun } = await ensureSettings(ctx);
       if (!configured) return;
-      if (!hadConfiguration) {
+      if (completedFirstRun) {
         // First-run setup ends on its Ready message rather than falling
         // straight through into the regular settings menu.
         reload = configured.shortcut !== registeredShortcut;
         return;
       }
+      // A recovered missing model file also lands here: the user asked for
+      // settings, so continue into them instead of making them run the
+      // command a second time.
       const { showSettingsMenu } = await import("./settings-menu.js");
       reload = await showSettingsMenu(pi, ctx, configured, registeredShortcut);
     });

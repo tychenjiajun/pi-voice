@@ -145,7 +145,7 @@ export function registerFileTranscriptionTool(
               content: [
                 {
                   type: "text",
-                  text: `Queued ${audio.seconds.toFixed(1)}s from ${basename(inputPath)} for local transcription…`,
+                  text: `Queued ${audio.seconds.toFixed(1)}s from ${basename(inputPath)} for transcription…`,
                 },
               ],
               details: {
