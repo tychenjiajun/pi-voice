@@ -11,6 +11,7 @@ import { isMacOSPermissionDenied } from "./audio-errors.js";
 import { logStep, watchEventLoop } from "./log.js";
 import { DictationController } from "./dictation-controller.js";
 import { VoiceKeys } from "./keybindings.js";
+import { polishTranscript } from "./polish.js";
 import type { TranscribeSettings } from "./settings.js";
 import { displayShortcut } from "./shortcut-core.js";
 import { TranscriptionService } from "./transcription-service.js";
@@ -19,6 +20,7 @@ import type { RecordingMeter } from "./visualizer.js";
 type ActiveRecording = {
   dictation: DictationController;
   meter: RecordingMeter;
+  settings: TranscribeSettings;
   /** Ends the event-loop watch held for the whole recording. */
   unwatch: () => void;
 };
@@ -146,6 +148,8 @@ export function createPiVoiceRuntime(
       currentModelId: previous.model.id,
       microphone: previous.microphone,
       backend: previous.backend,
+      polishEnabled: previous.polishEnabled,
+      polishModel: previous.polishModel,
       postActivation: "advance",
     });
     if (configured) rememberSettings(configured);
@@ -293,7 +297,10 @@ export function createPiVoiceRuntime(
       if (!result) {
         await reportDictationError(ctx, active.dictation);
       } else if (result.text) {
-        ctx.ui.pasteToEditor(result.text);
+        const text = active.settings.polishEnabled
+          ? await polishTranscript(ctx, result.text, true, active.settings.polishModel)
+          : result.text;
+        ctx.ui.pasteToEditor(text);
         showTranscribeStatus(
           ctx,
           formatTranscriptionSummary(result.speechSeconds, result.transcribeSeconds),
@@ -369,7 +376,7 @@ export function createPiVoiceRuntime(
         `${rawKeyHint(stopKeys, "to transcribe")}  ${keys.hint("voice.dictation.cancel", "to discard")}`,
       );
       updateMeter();
-      recording = { dictation: controller, meter, unwatch: watchEventLoop() };
+      recording = { dictation: controller, meter, settings: configured, unwatch: watchEventLoop() };
       listenForKeys(ctx);
     } catch (error) {
       recording?.unwatch();

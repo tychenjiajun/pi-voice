@@ -23,6 +23,7 @@ import {
   type BackendSettings,
   type ChineseOutput,
   type MicrophoneSetting,
+  type PolishModelRef,
   type TranscribeSettings,
   type TranscriptionLanguage,
 } from "./settings.js";
@@ -48,6 +49,7 @@ type SettingsAction =
   | "backend"
   | "transcription-language"
   | "chinese-output"
+  | "post-processing"
   | "microphone"
   | "shortcut";
 
@@ -91,6 +93,11 @@ function backendSummary(backend: BackendSettings): string {
   return backend.type === "openai-asr" ? `Remote · ${backend.model}` : "Local model";
 }
 
+function polishSummary(polishEnabled: boolean | undefined, model: PolishModelRef | undefined): string {
+  if (!polishEnabled) return "Off";
+  return model ? `${model.provider}/${model.id}` : "Pi's current model";
+}
+
 function settingsHomeChoices(
   configured: TranscribeSettings,
   permission: Permission,
@@ -115,6 +122,13 @@ function settingsHomeChoices(
       summary: backendSummary(configured.backend),
       description:
         "Local model, or an OpenAI-compatible remote ASR endpoint (local model stays as fallback)",
+    },
+    {
+      value: "post-processing",
+      label: "Post-processing",
+      summary: polishSummary(configured.polishEnabled, configured.polishModel),
+      description:
+        "Refine transcripts with Pi's current model after ASR, like context compaction",
     },
     {
       value: "transcription-language",
@@ -474,6 +488,128 @@ async function editBackend(
   return saved;
 }
 
+async function choosePolishEnabled(
+  ctx: ExtensionContext,
+  current: boolean,
+): Promise<boolean | undefined> {
+  const choices: SingleSelectChoice<"off" | "on">[] = [
+    {
+      value: "off",
+      label: "Off",
+      description: "Insert transcripts exactly as ASR output them",
+    },
+    {
+      value: "on",
+      label: "On",
+      description:
+        "Refine transcripts after ASR with a Pi model and its provider auth, like context compaction; keeps the raw transcript on failure",
+    },
+  ];
+  const chosen = await ctx.ui.custom<"off" | "on" | undefined>(
+    (tui, theme, keybindings, done) =>
+      new SingleSelectPicker(
+        tui,
+        theme,
+        keybindings,
+        choices,
+        current ? "on" : "off",
+        { title: "Post-processing", cancelLabel: "back" },
+        done,
+      ),
+  );
+  return chosen === undefined ? undefined : chosen === "on";
+}
+
+function polishModelKey(model: PolishModelRef): string {
+  return `${model.provider}/${model.id}`;
+}
+
+function samePolishModel(
+  left: PolishModelRef | undefined,
+  right: PolishModelRef | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.provider === right.provider && left.id === right.id;
+}
+
+/** Pick Pi's current model (default) or any model with configured auth. */
+async function choosePolishModel(
+  ctx: ExtensionContext,
+  current: PolishModelRef | undefined,
+): Promise<"current" | PolishModelRef | undefined> {
+  const available = ctx.modelRegistry.getAvailable();
+  const models = available.length > 0 ? available : ctx.modelRegistry.getAll();
+  const choices: SingleSelectChoice<string>[] = [
+    {
+      value: "current",
+      label: "Pi's current model",
+      description: "Use whichever model the agent is using (default)",
+    },
+  ];
+  const seen = new Set<string>();
+  for (const model of models) {
+    const key = `${model.provider}/${model.id}`;
+    if (key === "current" || seen.has(key)) continue;
+    seen.add(key);
+    choices.push({ value: key, label: key, description: model.name });
+  }
+  if (current && !seen.has(polishModelKey(current))) {
+    choices.push({
+      value: polishModelKey(current),
+      label: polishModelKey(current),
+      description: "Configured post-processing model (not currently available)",
+    });
+  }
+  const chosen = await ctx.ui.custom<string | undefined>((tui, theme, keybindings, done) =>
+    new SingleSelectPicker(
+      tui,
+      theme,
+      keybindings,
+      choices,
+      current ? polishModelKey(current) : "current",
+      { title: "Post-processing model", cancelLabel: "back" },
+      done,
+    ),
+  );
+  if (chosen === undefined) return undefined;
+  if (chosen === "current") return "current";
+  const slash = chosen.indexOf("/");
+  return { provider: chosen.slice(0, slash), id: chosen.slice(slash + 1) };
+}
+
+/** Post-processing row flow: toggle, then choose Pi's current model or an override. */
+async function editPostProcessing(
+  ctx: ExtensionContext,
+  configured: TranscribeSettings,
+): Promise<boolean> {
+  const enabled = await choosePolishEnabled(ctx, configured.polishEnabled ?? false);
+  if (enabled === undefined) return false;
+  if (!enabled) {
+    if (!configured.polishEnabled) return false;
+    return saveUpdatedSettings(
+      ctx,
+      configured,
+      { ...configured, polishEnabled: false },
+      "Post-processing disabled",
+    );
+  }
+
+  const selection = await choosePolishModel(ctx, configured.polishModel);
+  if (selection === undefined) return false;
+  const polishModel = selection === "current" ? undefined : selection;
+  if (configured.polishEnabled && samePolishModel(configured.polishModel, polishModel)) {
+    return false;
+  }
+  return saveUpdatedSettings(
+    ctx,
+    configured,
+    { ...configured, polishEnabled: true, polishModel },
+    polishModel
+      ? `Post-processing enabled (${polishModelKey(polishModel)})`
+      : "Post-processing enabled (Pi's current model)",
+  );
+}
+
 export async function openMacOSMicrophoneSettings(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -549,6 +685,8 @@ export async function showSettingsMenu(
         currentModelId: configured.model.id,
         microphone: configured.microphone,
         backend: configured.backend,
+        polishEnabled: configured.polishEnabled,
+        polishModel: configured.polishModel,
         postActivation: "stay",
         onPreferredLanguagesChange: async (preferredLanguages) => {
           if (languagesEqual(preferredLanguages, configured.preferredLanguages)) return;
@@ -564,6 +702,11 @@ export async function showSettingsMenu(
 
     if (action === "backend") {
       await editBackend(ctx, configured);
+      continue;
+    }
+
+    if (action === "post-processing") {
+      await editPostProcessing(ctx, configured);
       continue;
     }
 

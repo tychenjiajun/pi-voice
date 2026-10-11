@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { Type } from "typebox";
 import { AsyncLimiter } from "./async-limiter.js";
+import { polishTranscript } from "./polish.js";
 import type { TranscribeSettings } from "./settings.js";
 import type { TranscriptionService } from "./transcription-service.js";
 
@@ -83,7 +84,7 @@ export function registerFileTranscriptionTool(
   pi.registerTool({
     name: "transcribe_file",
     label: "Transcribe File",
-    description: `Transcribe speech from a local audio or video file using Pi Voice's configured transcription backend (local model, or the configured remote ASR endpoint with the local model as fallback). Requires the ffmpeg executable on PATH (or PI_VOICE_FFMPEG_PATH). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; a complete transcript is saved to a temporary file when needed.`,
+    description: `Transcribe speech from a local audio or video file using Pi Voice's configured transcription backend (local model, or the configured remote ASR endpoint with the local model as fallback), then applies Pi Voice's compaction-style post-processing when it is enabled. Requires the ffmpeg executable on PATH (or PI_VOICE_FFMPEG_PATH). Output is truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}; a complete transcript is saved to a temporary file when needed.`,
     promptSnippet: "Transcribe speech from local audio or video files",
     promptGuidelines: [
       "Use transcribe_file when speech in a local audio or video file needs to be read, analyzed, or transcribed.",
@@ -153,11 +154,20 @@ export function registerFileTranscriptionTool(
                 seconds: audio.seconds,
               },
             });
-            const transcript = await service.transcribeFile(
+            const rawTranscript = await service.transcribeFile(
               configured,
               audio.pcm,
               operationSignal,
             );
+            const transcript = configured.polishEnabled
+              ? await polishTranscript(
+                  ctx,
+                  rawTranscript,
+                  true,
+                  configured.polishModel,
+                  operationSignal,
+                )
+              : rawTranscript;
             const details: FileTranscriptionDetails = {
               inputPath,
               modelId: configured.model.id,

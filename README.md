@@ -1,10 +1,10 @@
 # Pi Voice
 
-Speech-to-text for Pi — on-device model or OpenAI-compatible remote ASR.
+Speech-to-text for Pi — on-device model or OpenAI-compatible remote ASR, with optional compaction-style post-processing.
 
 Press a keyboard shortcut, talk, and the resulting transcript will be put directly into your chat.
 
-> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) with the local model kept as a fallback. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
+> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) with the local model kept as a fallback, plus compaction-style post-processing that refines a transcript with Pi's own model. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
 
 ## Install
 
@@ -27,7 +27,7 @@ The extension registers:
 - a configurable terminal shortcut (`Ctrl+Alt+Z` by default) to start and stop recording;
 - `/voice`, which does the same as the shortcut. While recording, `Space` also stops and transcribes, and `Escape` discards;
 - a `transcribe_file` tool that the agent can use to transcribe local audio or video files;
-- `/voice-settings` for preferred languages, model, transcription language, microphone, and shortcut settings.
+- `/voice-settings` for preferred languages, model, transcription language, post-processing, microphone, and shortcut settings.
 
 `/transcribe` remains available as a compatibility alias for `/voice-settings`.
 
@@ -55,6 +55,24 @@ Behavior:
 - Switching back to **Local model** restores the original behavior; the local model is still required either way (it is the fallback and file transcription still needs it).
 
 Transcripts still go through the **Chinese output** script conversion preference.
+
+## Post-processing (compaction-style refinement)
+
+After ASR produces a transcript, Pi Voice can refine it with the same model (and provider credentials) Pi agents already use for tasks like conversation compaction. The cleanup fixes obvious speech-recognition errors, punctuation, and capitalization, and strips filler words and false starts — without a separate endpoint to configure.
+
+Set it up in `/voice-settings` → **Post-processing** → **On**. You then choose the model:
+
+- **Pi's current model** (default) — whichever model the agent is using, exactly like compaction;
+- **a different model** — any model from Pi's registry, using that provider's configured authentication.
+
+Pi Voice makes a small nested request through Pi's model registry, so it automatically reuses Pi's model definitions and API keys (or OAuth). No base URL, key, or timeout is stored in Pi Voice settings.
+
+Behavior:
+
+- **Best-effort only.** If post-processing fails (no usable model, abort, provider/network error, or an empty response), the raw transcript is used unchanged and the failure is logged to `~/.pi/agent/pi-voice.log`. An override that is no longer in the registry falls back to the agent's current model.
+- **Reasoning-safe.** A provider's thinking is ignored (Pi reports it as `thinking` blocks), and inline reasoning tags a model may embed in its text are stripped. If only reasoning comes back, the raw transcript is kept.
+- **Discrete, not streaming.** Refinement happens after the full transcript is produced, so there is no live preview of the polished text.
+- **Applies to all transcription.** Microphone dictation and the `transcribe_file` tool both go through the same post-processing step when it is enabled.
 
 ## Upgrading from pi-transcribe
 
@@ -96,6 +114,17 @@ The legacy `PI_TRANSCRIBE_FFMPEG_PATH` variable remains supported when `PI_VOICE
 When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance to the agent. The agent should ask before running a package-manager command. Model setup is still explicit: run `/voice-settings` once in the interactive TUI to choose and, after confirmation, download a local model.
 
 ## Changelog
+
+### 0.3.0
+
+**Added — Post-processing (compaction-style refinement)**
+
+- After ASR, transcripts can be refined with the agent's current model and provider, reusing the same nested-model path as conversation compaction.
+- Configure in `/voice-settings` → **Post-processing**: toggle **Off / On**, then use **Pi's current model** or pick a different model from Pi's registry (its model definitions and authentication are reused).
+- **Best-effort only:** no usable model, aborts, provider failures, and empty responses all keep the raw transcript; an override that disappears falls back to the agent's current model. Diagnostics go to `~/.pi/agent/pi-voice.log`.
+- **Reasoning-safe:** provider thinking blocks are ignored, inline reasoning tags (`think` … `response`) are stripped, and a response that is only reasoning keeps the raw transcript.
+- Applies to both microphone dictation and the `transcribe_file` tool.
+- Existing settings remain valid: post-processing defaults to **Off**.
 
 ### 0.2.0
 

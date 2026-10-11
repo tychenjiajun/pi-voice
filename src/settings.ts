@@ -28,6 +28,12 @@ export type BackendSettings =
   | { type: "transcribe-cpp" }
   | { type: "openai-asr"; baseUrl: string; model: string; apiKeyEnv: string };
 
+/**
+ * Explicit model for post-processing, resolved through Pi's model registry and
+ * its provider auth. Absent means the agent's current model.
+ */
+export type PolishModelRef = { provider: string; id: string };
+
 function defaultChineseOutput(): ChineseOutput {
   const locale = Intl.DateTimeFormat().resolvedOptions().locale;
   const subtags = locale.toLowerCase().split("-");
@@ -47,6 +53,10 @@ export type TranscribeSettings = {
   transcriptionLanguage: TranscriptionLanguage;
   chineseOutput: ChineseOutput;
   microphone: MicrophoneSetting;
+  /** Optional post-processing with Pi's current model; absent means disabled (backward compatible). */
+  polishEnabled?: boolean;
+  /** Optional post-processing model override; absent uses the agent's current model. */
+  polishModel?: PolishModelRef;
   model: {
     source: "catalog";
     id: string;
@@ -147,6 +157,13 @@ function validateBackend(value: unknown): BackendSettings | undefined {
   return undefined;
 }
 
+function normalizePolishModel(value: unknown): PolishModelRef | undefined {
+  if (!isObject(value)) return undefined;
+  if (typeof value.provider !== "string" || !value.provider.trim()) return undefined;
+  if (typeof value.id !== "string" || !value.id.trim()) return undefined;
+  return { provider: value.provider.trim(), id: value.id.trim() };
+}
+
 function validateSettings(value: unknown): TranscribeSettings | undefined {
   if (!isObject(value) || value.version !== SETTINGS_VERSION) return undefined;
   const backend = validateBackend(value.backend);
@@ -163,6 +180,7 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
   const preferredLanguages = normalizeLanguages(value.preferredLanguages);
   const microphone = validateMicrophone(value.microphone);
   if (!preferredLanguages || !microphone) return undefined;
+  const polishModel = normalizePolishModel(value.polishModel);
 
   return {
     version: SETTINGS_VERSION,
@@ -176,6 +194,8 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
     ),
     chineseOutput: validateChineseOutput(value.chineseOutput),
     microphone,
+    polishEnabled: value.polishEnabled === true,
+    ...(polishModel ? { polishModel } : {}),
     model: {
       source: "catalog",
       id: value.model.id,
@@ -244,6 +264,10 @@ type ModelSettingsOptions = {
   microphone?: MicrophoneSetting;
   /** Preserved across model re-selection; defaults to the local backend. */
   backend?: BackendSettings;
+  /** Preserved across model re-selection; defaults to disabled. */
+  polishEnabled?: boolean;
+  /** Preserved across model re-selection; absent means the agent's current model. */
+  polishModel?: PolishModelRef;
 };
 
 export function settingsForModel(
@@ -268,6 +292,8 @@ export function settingsForModel(
     ),
     chineseOutput: options.chineseOutput ?? defaultChineseOutput(),
     microphone: { ...(options.microphone ?? DEFAULT_MICROPHONE) },
+    polishEnabled: options.polishEnabled ?? false,
+    ...(options.polishModel ? { polishModel: options.polishModel } : {}),
     model: { source: "catalog", id: modelId, path: modelPath },
   };
 }

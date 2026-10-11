@@ -23,6 +23,7 @@ import {
   type BackendSettings,
   type ChineseOutput,
   type MicrophoneSetting,
+  type PolishModelRef,
   type TranscribeSettings,
   type TranscriptionLanguage,
 } from "./settings.js";
@@ -56,6 +57,10 @@ type ModelSelectionOptions = {
   microphone?: MicrophoneSetting;
   /** Preserved across the model re-pick so remote config survives. */
   backend?: BackendSettings;
+  /** Preserved across the model re-pick so post-processing config survives. */
+  polishEnabled?: boolean;
+  /** Preserved across the model re-pick; absent means the agent's current model. */
+  polishModel?: PolishModelRef;
   /** Persists language changes made before this flow activates a model. */
   onPreferredLanguagesChange?: (languages: string[]) => Promise<void>;
   postActivation?: CatalogModelPostActivation;
@@ -81,6 +86,8 @@ export async function runModelSelection(
       chineseOutput: configured?.chineseOutput ?? options.chineseOutput,
       microphone: configured?.microphone ?? options.microphone ?? DEFAULT_MICROPHONE,
       backend: configured?.backend ?? options.backend,
+      polishEnabled: configured?.polishEnabled ?? options.polishEnabled ?? false,
+      polishModel: configured?.polishModel ?? options.polishModel,
     }),
     (settings) => {
       configured = settings;
@@ -209,6 +216,8 @@ export async function changeOnboardingModel(
       microphone: current.microphone,
       chineseOutput: current.chineseOutput,
       backend: current.backend,
+      polishEnabled: current.polishEnabled,
+      polishModel: current.polishModel,
     }),
     (settings) => {
       chosen = settings;

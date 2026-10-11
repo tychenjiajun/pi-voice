@@ -9,7 +9,7 @@ import { dirname } from "node:path";
 
 export type LogLevel = "error" | "warn" | "info" | "debug";
 /** Who wrote the line: Pi Voice, or a native library through its log hook. */
-export type LogSource = "voice" | "recorder" | "transcribe";
+export type LogSource = "voice" | "recorder" | "transcribe" | "polish";
 
 const RANK: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, debug: 3 };
 /** Past this the file moves to `.1`, replacing the previous one. */
