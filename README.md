@@ -64,7 +64,7 @@ After ASR produces a transcript, Pi Voice can refine it with the same model (and
 Set it up in `/voice-settings` → **Post-processing** → **On**. You then choose the model:
 
 - **Pi's current model** (default) — whichever model the agent is using, exactly like compaction;
-- **a different model** — any model from Pi's registry, using that provider's configured authentication.
+- **a different model** — any model from Pi's registry, using that provider's configured authentication. The picker is searchable: type a keyword (a model name or part of `provider/id`) to filter the list, `Enter` selects the highlighted match, and `Esc` clears the search.
 
 Pi Voice makes a small nested request through Pi's model registry, so it automatically reuses Pi's model definitions and API keys (or OAuth). No base URL, key, or timeout is stored in Pi Voice settings.
 
@@ -115,6 +115,14 @@ The legacy `PI_TRANSCRIBE_FFMPEG_PATH` variable remains supported when `PI_VOICE
 When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance to the agent. The agent should ask before running a package-manager command. Model setup is still explicit: run `/voice-settings` once in the interactive TUI to choose a mode and, in local mode, confirm the download of a local model.
 
 ## Changelog
+
+### 0.7.0
+
+**Added — Searchable post-processing model picker**
+
+- `/voice-settings` → **Post-processing** → model now has a search box, so a registry with a thousand-plus models can be narrowed by typing instead of arrowing through the whole list.
+- The search uses the same fuzzy matcher as the transcription model picker (`fuzzyFilter` from `@earendil-works/pi-tui`) and matches the model name as well as `provider/id`, so `wspr` finds `openai/whisper-1` and `claude` finds `anthropic/claude-opus-4-5`.
+- Results are sorted by match quality with the cursor on the best match (Enter picks it), `Esc` clears the search and restores the full list, and the subtitle reminds you that typing filters the models.
 
 ### 0.6.0
 

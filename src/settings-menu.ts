@@ -389,7 +389,7 @@ function samePolishModel(
 }
 
 /** Pick Pi's current model (default) or any model with configured auth. */
-async function choosePolishModel(
+export async function choosePolishModel(
   ctx: ExtensionContext,
   current: PolishModelRef | undefined,
 ): Promise<"current" | PolishModelRef | undefined> {
@@ -423,7 +423,14 @@ async function choosePolishModel(
       keybindings,
       choices,
       current ? polishModelKey(current) : "current",
-      { title: "Post-processing model", cancelLabel: "back" },
+      {
+        title: "Post-processing model",
+        subtitle: "Type to filter models",
+        // The registry can hold a thousand-plus models; arrowing through them
+        // is unusable, so the list is fuzzy-searchable like every model picker.
+        searchable: true,
+        cancelLabel: "back",
+      },
       done,
     ),
   );
