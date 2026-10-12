@@ -116,6 +116,13 @@ When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance
 
 ## Changelog
 
+### 0.6.0
+
+**Changed — Fuzzy model search**
+
+- The model picker now uses the same fuzzy filter Pi's own model selector uses (`fuzzyFilter` from `@earendil-works/pi-tui`), so typing partial or abbreviated names finds matches that exact substring search could not — e.g. `wspr` matches `whisper-medium`, and `pkrt` matches `parakeet`. Results within each section are also sorted by match quality, putting the best-scoring model at the top.
+- While a search query is active the cursor stays on the best match instead of following a model that may have moved or dropped out of the results, matching Pi's model selector interaction.
+
 ### 0.5.0
 
 **Changed — Exclusive local / remote modes (no fallback)**

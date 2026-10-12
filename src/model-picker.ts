@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   CATALOG_MODELS,
+  catalogModelSearchText,
   canonicalLanguage,
   languageIdentity,
   displayLanguage,
@@ -32,7 +33,6 @@ import {
 import {
   MANUAL_LANGUAGE_TAG,
   ON_DISK_LABEL,
-  matchesCatalogSearch,
   modelDetailText,
   modelTableLayout,
   modelTableRow,
@@ -576,14 +576,19 @@ export class CatalogModelPicker extends Container implements Focusable {
 
   // The sectioned list: models on disk first, then the ranked catalog with
   // each of them left out, so a model is listed once. A search filters each
-  // section in place, in its own order, and reaches the folded models too:
-  // while a query is on they are a section of their own, so a match there
-  // says why it was folded.
+  // section in place by fuzzy match quality (best matches first) and reaches
+  // the folded models too: while a query is on they are a section of their
+  // own, so a match there says why it was folded.
   private buildRows(query: string): ListRow[] {
     const downloaded = this.downloadedModels();
     const onDisk = new Set(downloaded.map((model) => model.id));
+    // fuzzyFilter is the same matcher Pi's own model selector uses: each
+    // token's characters must appear in order but not consecutively, so typing
+    // "wspr" finds "whisper". It also re-sorts each section by match quality so
+    // the best-scoring match is at the top, which makes a 1000+ model catalog
+    // navigable by typing rather than scrolling.
     const matching = (models: readonly CatalogModel[]) =>
-      query ? models.filter((model) => matchesCatalogSearch(model, query)) : models;
+      query ? fuzzyFilter([...models], query, catalogModelSearchText) : models;
     const keep = (models: readonly CatalogModel[]) =>
       matching(models).filter((model) => !onDisk.has(model.id));
     const rows: ListRow[] = [];
@@ -688,9 +693,13 @@ export class CatalogModelPicker extends Container implements Focusable {
     this.body.addChild(this.footer);
 
     const query = this.search.getValue().trim();
-    // Selecting a model reorders the Downloaded section, so the cursor
-    // follows the highlighted model rather than its old row number.
-    const highlightedId = this.highlightedModel()?.id;
+    // Selecting a model reorders the Downloaded section, so the cursor follows
+    // the highlighted model rather than its old row number — but only when not
+    // searching. While a query is on, handleInput resets selectedIndex to 0
+    // on each keystroke, and fuzzyFilter re-sorts every section by match
+    // quality, so the best match should stay at the top rather than chasing a
+    // model that may have moved or dropped out of the results.
+    const highlightedId = query ? undefined : this.highlightedModel()?.id;
     this.rows = this.buildRows(query);
     this.filtered = this.rows.flatMap((row) => (row.type === "model" ? [row.model] : []));
     const followed = highlightedId === undefined
