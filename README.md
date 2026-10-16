@@ -116,6 +116,28 @@ When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance
 
 ## Changelog
 
+### 0.8.0
+
+**Added — Upstream sync: voice activity detection, long-audio chunking, and language detection**
+
+- Synced with upstream `@earendil-works/pi-voice` 0.2.0. The remote ASR backend and compaction-style post-processing from this fork are unchanged.
+- **Voice activity detection** using a bundled Silero model (`models/silero-vad-v6.2-F32.gguf`): silence and noise are filtered from dictation so only speech is transcribed. The hidden `voiceActivityDetection` setting in `settings.json` turns it off (default `true`).
+- **Long-audio chunking**: clips that do not fit one model window are cut at pauses before batch transcription, so non-Whisper models no longer truncate long recordings. The hidden `longformChunking` setting turns it off (default `true`); models that handle long audio natively (Whisper, Parakeet Ultra) and streaming models skip it.
+- **Automatic language detection**: when a multilingual model has no native detection and Auto is selected, the shared **VoxLingua107** detector picks the language. Download it from the language picker; Auto is only offered when the model supports at least two of your preferred languages and the detector can identify them.
+- **Chinese output** now keys off the transcript text (Han characters, no kana) instead of language detection, so remote and short-clip transcripts convert reliably.
+- **New catalog models**: Parakeet Ultra and Granite Speech 5.0 470M TurboCTC.
+- Decoded audio for `transcribe_file` is raised to 512 MiB (about 2.3 hours).
+
+**Fixed**
+
+- Whisper-family out-of-memory failures during transcription now retry on the CPU device instead of failing the take.
+
+**Changed**
+
+- Dependencies: `transcribe-cpp` 0.4.0 and `@handy-computer/recorder` 0.2.1.
+- Catalog metadata is imported from `catalog/catalog.json` directly; the generated `catalog.generated.ts` copy is gone.
+- Built against `@earendil-works/pi-coding-agent` 1.3.0.
+
 ### 0.7.0
 
 **Added — Searchable post-processing model picker**
