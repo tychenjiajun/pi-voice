@@ -5,6 +5,7 @@ import {
   resolveModelLanguage,
   type CatalogModel,
 } from "./catalog.js";
+import { autoLanguagePolicy } from "./language-detection-policy.js";
 import { DEFAULT_SHORTCUT, normalizeShortcut } from "./shortcut-core.js";
 import { legacySettingsPath, settingsPath } from "./settings-path.js";
 
@@ -42,7 +43,7 @@ function defaultChineseOutput(): ChineseOutput {
   return "simplified";
 }
 
-/** "auto" asks a capable model to detect the language; otherwise this is a language code. */
+/** "auto" uses native detection or the external detector; otherwise a language code. */
 export type TranscriptionLanguage = string;
 
 export type TranscribeSettings = {
@@ -57,6 +58,10 @@ export type TranscribeSettings = {
   polishEnabled?: boolean;
   /** Optional post-processing model override; absent uses the agent's current model. */
   polishModel?: PolishModelRef;
+  /** Transcribe only the speech in a recording, not its silence and noise. */
+  voiceActivityDetection: boolean;
+  /** Hidden, settings.json only: false decodes long audio in one piece, without voice activity cuts. */
+  longformChunking: boolean;
   /**
    * The local catalog model. Present only in local mode (backend
    * `transcribe-cpp`); remote mode stores no local model.
@@ -112,7 +117,7 @@ function defaultTranscriptionLanguage(
   model: CatalogModel,
   preferredLanguages: readonly string[] = [],
 ): TranscriptionLanguage {
-  if (model.capabilities.languageDetection) return "auto";
+  if (autoLanguagePolicy(model, preferredLanguages).kind !== "unsupported") return "auto";
   for (const language of preferredLanguages) {
     const code = resolveModelLanguage(model, language);
     if (code) return code;
@@ -127,7 +132,9 @@ export function transcriptionLanguageForModel(
   preferredLanguages: readonly string[] = [],
 ): TranscriptionLanguage {
   if (typeof value === "string") {
-    if (value === "auto" && model.capabilities.languageDetection) return value;
+    if (value === "auto" && autoLanguagePolicy(model, preferredLanguages).kind !== "unsupported") {
+      return value;
+    }
     if (value !== "auto") {
       const code = resolveModelLanguage(model, value);
       if (code) return code;
@@ -220,6 +227,8 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
     microphone,
     polishEnabled: value.polishEnabled === true,
     ...(polishModel ? { polishModel } : {}),
+    voiceActivityDetection: value.voiceActivityDetection !== false,
+    longformChunking: value.longformChunking !== false,
     ...(backend.type === "transcribe-cpp"
       ? { model: { source: "catalog" as const, id: selected!.id, path: selected!.path } }
       : {}),
@@ -293,6 +302,8 @@ type ModelSettingsOptions = {
   polishEnabled?: boolean;
   /** Preserved across model re-selection; absent means the agent's current model. */
   polishModel?: PolishModelRef;
+  voiceActivityDetection?: boolean;
+  longformChunking?: boolean;
 };
 
 export function settingsForModel(
@@ -323,9 +334,12 @@ export function settingsForModel(
     microphone: { ...(options.microphone ?? DEFAULT_MICROPHONE) },
     polishEnabled: options.polishEnabled ?? false,
     ...(options.polishModel ? { polishModel: options.polishModel } : {}),
+    voiceActivityDetection: options.voiceActivityDetection ?? true,
+    longformChunking: options.longformChunking ?? true,
     model: { source: "catalog", id: modelId, path: modelPath },
   };
 }
+
 
 type RemoteSettingsOptions = Omit<ModelSettingsOptions, "backend"> & {
   backend: Extract<BackendSettings, { type: "openai-asr" }>;
@@ -348,6 +362,8 @@ export function settingsRemoteOnly(options: RemoteSettingsOptions): TranscribeSe
     microphone: { ...(options.microphone ?? DEFAULT_MICROPHONE) },
     polishEnabled: options.polishEnabled ?? false,
     ...(options.polishModel ? { polishModel: options.polishModel } : {}),
+    voiceActivityDetection: options.voiceActivityDetection ?? true,
+    longformChunking: options.longformChunking ?? true,
   };
 }
 
@@ -355,4 +371,20 @@ export function settingsRemoteOnly(options: RemoteSettingsOptions): TranscribeSe
 export function transcriptionModelLabel(settings: TranscribeSettings): string {
   if (settings.model) return settings.model.id;
   return settings.backend.type === "openai-asr" ? settings.backend.model : "none";
+}
+
+/** Preference edits re-resolve the language, so Auto never outlives support for it. */
+export function settingsWithPreferredLanguages(
+  current: TranscribeSettings,
+  preferredLanguages: readonly string[],
+): TranscribeSettings {
+  // Remote settings carry no local model, so there is no per-model language to
+  // re-resolve; the endpoint detects the language itself.
+  if (!current.model) {
+    return {
+      ...current,
+      preferredLanguages: [...new Set(preferredLanguages.map(languageIdentity))],
+    };
+  }
+  return settingsForModel(current.model.id, current.model.path, { ...current, preferredLanguages });
 }

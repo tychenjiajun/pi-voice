@@ -3,8 +3,10 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { downloadCatalogModel, pendingDownloads } from "./models.js";
 import { microphonePermission, type Permission } from "./audio.js";
-import { displayLanguage, getCatalogModel } from "./catalog.js";
+import { displayLanguage, getCatalogModel, LANGUAGE_DETECTION_MODEL } from "./catalog.js";
+import { autoLanguagePolicy } from "./language-detection-policy.js";
 import { chineseOutputSummary, isChineseLanguage } from "./chinese.js";
 import {
   chooseLanguages,
@@ -19,6 +21,7 @@ import {
 import { runModelSelection } from "./onboarding.js";
 import { chooseBackendType, promptRemoteBackend, warnMissingApiKey } from "./remote-asr.js";
 import {
+  settingsWithPreferredLanguages,
   writeSettings,
   type BackendSettings,
   type ChineseOutput,
@@ -94,6 +97,29 @@ function backendSummary(backend: BackendSettings): string {
 function polishSummary(polishEnabled: boolean | undefined, model: PolishModelRef | undefined): string {
   if (!polishEnabled) return "Off";
   return model ? `${model.provider}/${model.id}` : "Pi's current model";
+}
+
+let detectorDownload: Promise<void> | undefined;
+
+/**
+ * Fetch the language detector in the background; until it lands, Auto detect
+ * transcribes as `fallback`.
+ */
+function downloadLanguageDetector(ctx: ExtensionContext, fallback: string): void {
+  if (detectorDownload) return;
+  ctx.ui.notify("Downloading language detector…", "info");
+  detectorDownload = downloadCatalogModel(LANGUAGE_DETECTION_MODEL)
+    .then(
+      () => ctx.ui.notify("Language detector downloaded. Auto detect is ready.", "info"),
+      (error: unknown) => ctx.ui.notify(
+        `Couldn't download the language detector (${error instanceof Error ? error.message : String(error)}). ` +
+        `Auto detect will use ${displayLanguage(fallback)} until it's downloaded. ` +
+        "Choose Auto detect again to retry the download.",
+        "error",
+      ),
+    )
+    .catch(() => undefined) // The session may be gone by the time it settles.
+    .finally(() => { detectorDownload = undefined; });
 }
 
 export function settingsHomeChoices(
@@ -533,7 +559,7 @@ export async function showSettingsMenu(
       await saveUpdatedSettings(
         ctx,
         configured,
-        { ...configured, preferredLanguages: selection.languages },
+        settingsWithPreferredLanguages(configured, selection.languages),
         "Preferred languages saved",
       );
       continue;
@@ -550,10 +576,12 @@ export async function showSettingsMenu(
         backend: configured.backend,
         polishEnabled: configured.polishEnabled,
         polishModel: configured.polishModel,
+        voiceActivityDetection: configured.voiceActivityDetection,
+        longformChunking: configured.longformChunking,
         postActivation: "stay",
         onPreferredLanguagesChange: async (preferredLanguages) => {
           if (languagesEqual(preferredLanguages, configured.preferredLanguages)) return;
-          const next = { ...configured, preferredLanguages };
+          const next = settingsWithPreferredLanguages(configured, preferredLanguages);
           await writeSettings(next);
           Object.assign(configured, next);
           ctx.ui.notify("Preferred languages saved", "info");
@@ -575,15 +603,18 @@ export async function showSettingsMenu(
 
     if (action === "transcription-language") {
       const transcriptionLanguage = await chooseTranscriptionLanguage(ctx, configured);
-      if (
-        !transcriptionLanguage ||
-        transcriptionLanguage === configured.transcriptionLanguage
-      ) {
-        continue;
-      }
+      if (!transcriptionLanguage) continue;
       const model = configured.model
         ? getCatalogModel(configured.model.id)
         : undefined;
+      // Auto needs the detector on disk; choosing Auto again retries a failure.
+      if (model) {
+        const policy = autoLanguagePolicy(model, configured.preferredLanguages);
+        if (transcriptionLanguage === "auto" && policy.kind === "detect" && pendingDownloads(model, true).length) {
+          downloadLanguageDetector(ctx, policy.languages[0]!);
+        }
+      }
+      if (transcriptionLanguage === configured.transcriptionLanguage) continue;
       const summary = model
         ? transcriptionLanguageSummary(transcriptionLanguage, model)
         : transcriptionLanguage;

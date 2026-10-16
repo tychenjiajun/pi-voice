@@ -1,4 +1,4 @@
-import { CATALOG_MODELS_GENERATED } from "./catalog.generated.js";
+import catalog from "../catalog/catalog.json" with { type: "json" };
 import { canonicalLanguage, languageIdentity, resolveModelLanguage } from "./languages.js";
 export { canonicalLanguage, languageIdentity, resolveModelLanguage } from "./languages.js";
 
@@ -23,7 +23,11 @@ export type CatalogModel = {
   readonly sha256: string;
 };
 
-export const CATALOG_MODELS: readonly CatalogModel[] = CATALOG_MODELS_GENERATED;
+export const CATALOG_MODELS: readonly CatalogModel[] = catalog.models;
+
+/** Language detection model for transcription models without native
+ * language detection. */
+export const LANGUAGE_DETECTION_MODEL: CatalogModel = catalog.languageDetector;
 
 const languageNames = new Intl.DisplayNames(["en"], { type: "language" });
 

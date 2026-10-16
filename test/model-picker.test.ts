@@ -50,7 +50,7 @@ test("fuzzy search finds models that exact word matching would miss", () => {
     found.some((id) => id === "whisper-small"),
     `fuzzy "wspr" should include whisper-small, got: ${found.join(", ")}`,
   );
-  assert.match(footerText(picker), /5\/27 matching models/);
+  assert.match(footerText(picker), /5\/29 matching models/);
   picker.dispose();
 });
 
@@ -78,11 +78,13 @@ test("fuzzy search with a rare word highlights the unique match first", () => {
     testTui(24), testTheme(), keybindings(), ["en"], undefined,
     () => {}, activate,
   );
-  // "turbo" appears in only one model's search text, so it should be the
-  // sole result and highlighted at the top.
+  // "turbo" appears in two models' search text, so both match; the whisper
+  // model scores first and is highlighted at the top.
   for (const char of "turbo") picker.handleInput(char);
   const found = pickedModels(picker).map((model) => model.id);
-  assert.deepEqual(found, ["whisper-large-v3-turbo"], `got: ${found.join(", ")}`);
+  assert.ok(found.includes("whisper-large-v3-turbo"), `got: ${found.join(", ")}`);
+  assert.ok(found.includes("granite-speech-5.0-470m-turboctc"), `got: ${found.join(", ")}`);
+  assert.equal(found[0], "whisper-large-v3-turbo", `got: ${found.join(", ")}`);
   const allRows = rows(picker);
   const firstModel = allRows.find((row) => row.type === "model");
   assert.equal(firstModel?.model?.id, "whisper-large-v3-turbo");
@@ -120,13 +122,13 @@ test("pressing Esc clears the search and restores the full count", () => {
     () => {}, activate,
   );
   for (const char of "wspr") picker.handleInput(char);
-  assert.match(footerText(picker), /5\/27 matching models/);
+  assert.match(footerText(picker), /5\/29 matching models/);
   // Esc with search text present clears the query.
   picker.handleInput("\x1b");
-  assert.match(footerText(picker), /27 models/);
+  assert.match(footerText(picker), /29 models/);
   // The full count is shown, but some models are folded behind the fold row
-  // by default, so filtered has fewer than 27 entries.
-  assert.ok(pickedModels(picker).length < 27);
+  // by default, so filtered has fewer than 29 entries.
+  assert.ok(pickedModels(picker).length < 29);
   picker.dispose();
 });
 
@@ -137,6 +139,6 @@ test("a non-matching query shows no results", () => {
   );
   for (const char of "zzzzz") picker.handleInput(char);
   assert.equal(pickedModels(picker).length, 0, "no models should match 'zzzzz'");
-  assert.match(footerText(picker), /0\/27 matching models/);
+  assert.match(footerText(picker), /0\/29 matching models/);
   picker.dispose();
 });

@@ -27,6 +27,8 @@ const settings: TranscribeSettings = {
   transcriptionLanguage: "en",
   chineseOutput: "simplified",
   microphone: { type: "system-default" },
+  voiceActivityDetection: true,
+  longformChunking: true,
   model: {
     source: "catalog",
     id: "parakeet-unified-en-0.6b",

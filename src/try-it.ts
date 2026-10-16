@@ -18,6 +18,7 @@ import type { TranscribeSettings } from "./settings.js";
 import { displayShortcut } from "./shortcut-core.js";
 import { TranscriptionService } from "./transcription-service.js";
 import { TranscriptPreview } from "./transcript-preview.js";
+import { VoiceActivityDetection } from "./vad.js";
 import { editorBorder, onboardingHeader, PANEL_PADDING, panelBorder, paneRowBudget } from "./ui-components.js";
 import {
   formatTranscriptionSummary,
@@ -28,7 +29,7 @@ import {
 
 type UiTheme = ExtensionContext["ui"]["theme"];
 
-type TryItPaneOptions = Pick<DictationControllerOptions, "openCapture" | "now"> & {
+type TryItPaneOptions = Pick<DictationControllerOptions, "openCapture" | "now" | "createSpeechFilter"> & {
   /** Shown only before the first recording attempt when macOS has not asked yet. */
   showMacPermissionNote?: boolean;
 };
@@ -83,6 +84,7 @@ export class TryItPane implements Component {
     this.dictation = new DictationController(service, {
       openCapture: options.openCapture,
       now: options.now,
+      createSpeechFilter: options.createSpeechFilter,
       onChange: () => this.refresh(),
       onAudio: (chunk) => {
         this.analyzer.push(chunk);
@@ -153,6 +155,10 @@ export class TryItPane implements Component {
         details = fg("warning", `The microphone stopped after ${speechSeconds.toFixed(1)}s: ${interruption.message}`);
       } else if (localModel && needsFasterModel(speechSeconds, transcribeSeconds)) {
         details = fg("warning", `Slow on this machine? Press ${this.keys.keyText("voice.tryIt.model")} to try another model.`);
+      }
+      if (state.result.warning) {
+        const warning = fg("warning", state.result.warning);
+        details = details ? `${details}\n${warning}` : warning;
       }
     } else if (state.phase === "error") {
       activity = fg("error", state.stage === "model" ? "Could not load the model" : state.stage === "capture" ? "Microphone capture failed" : "Transcription failed");
@@ -311,17 +317,20 @@ export class TryItPane implements Component {
 }
 
 export async function tryVoice(ctx: ExtensionContext, settings: TranscribeSettings): Promise<TryItResult | undefined> {
-  const service = new TranscriptionService();
+  const voiceActivity = new VoiceActivityDetection();
+  const service = new TranscriptionService(undefined, (pcm, signal) => voiceActivity.scoreClip(pcm, signal));
   let pane: TryItPane | undefined;
   try {
     return await ctx.ui.custom<TryItResult>((tui, theme, keybindings, done) =>
       (pane = new TryItPane(tui, theme, keybindings, settings, service, done, {
         openCapture: openMicrophone,
+        createSpeechFilter: (configured, onSpeech) => voiceActivity.createFilter(configured, onSpeech),
         showMacPermissionNote: process.platform === "darwin" && microphonePermission() === "not-determined",
       })),
     );
   } finally {
     await pane?.dispose();
     await service.shutdown();
+    await voiceActivity.dispose();
   }
 }

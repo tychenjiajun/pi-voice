@@ -17,6 +17,19 @@ export type CaptureSinks = {
   onAudio(chunk: Float32Array): void;
   onFailure(error: Error): void;
 };
+/** Voice activity detection for one take: passes on only the speech. */
+export type SpeechFilter = {
+  push(chunk: Float32Array): void;
+  /** All kept audio, once every pushed chunk is decided. */
+  finish(): Promise<Float32Array>;
+  discard(): void;
+};
+/** Kept audio, with its Silero frame probabilities when it has them. */
+export type OnSpeech = (chunk: Float32Array, probs?: readonly number[]) => void;
+export type CreateSpeechFilter = (
+  settings: TranscribeSettings,
+  onSpeech: OnSpeech,
+) => SpeechFilter | undefined;
 /** Opens a microphone and starts recording; resolves once audio is flowing. */
 export type OpenCapture = (microphone: MicrophoneSetting, sinks: CaptureSinks) => Promise<Capture>;
 export type DictationResult = {
@@ -27,6 +40,8 @@ export type DictationResult = {
   interruption?: Error;
   /** Audio lost inside the recording because it wasn't read in time. */
   droppedFrames?: number;
+  /** Language detection fallback, never part of the text. */
+  warning?: string;
 };
 export type DictationState =
   | { phase: "idle" | "ready" | "starting" | "listening" | "transcribing" | "cancelling" | "disposed" }
@@ -37,12 +52,15 @@ export type DictationControllerOptions = {
   now?: () => number;
   onChange?: (state: DictationState) => void;
   onAudio?: (chunk: Float32Array) => void;
+  /** Without a filter, every chunk is transcribed. */
+  createSpeechFilter?: CreateSpeechFilter;
 };
 type Take = {
   settings: TranscribeSettings;
   reservation: DictationReservation;
   abort: AbortController;
   chunker: PcmChunker;
+  filter?: SpeechFilter;
   capture?: Capture;
   interruption?: Error;
   stopping?: Promise<CapturedAudio>;
@@ -106,8 +124,13 @@ export class DictationController {
     }
     const take: Take = {
       settings, reservation, abort: new AbortController(),
-      chunker: new PcmChunker((chunk) => reservation.feed(chunk)),
+      chunker: new PcmChunker((chunk, probs) => reservation.feed(chunk, probs)),
     };
+    try {
+      take.filter = this.options.createSpeechFilter?.(settings, (chunk, probs) => this.feedStream(take, chunk, probs));
+    } catch (cause) {
+      log.warn(`voice activity detection unavailable: ${describeError(cause)}`);
+    }
     this.take = take;
     void reservation.ready.then(
       () => {
@@ -133,7 +156,7 @@ export class DictationController {
   prepare(settings: TranscribeSettings): void {
     if (this.disposed || ["starting", "listening", "transcribing", "cancelling"].includes(this.current.phase)) return;
     if (this.take?.settings === settings && this.readiness !== "failed") return;
-    this.take?.reservation.cancel();
+    if (this.take) this.release(this.take);
     this.take = undefined;
     if (this.reserve(settings)) this.setState({ phase: "ready" });
   }
@@ -149,7 +172,7 @@ export class DictationController {
     if (["listening", "transcribing", "cancelling"].includes(this.current.phase)) return Promise.resolve();
     let take = this.take?.settings === settings && this.readiness !== "failed" ? this.take : undefined;
     if (!take) {
-      this.take?.reservation.cancel();
+      if (this.take) this.release(this.take);
       this.take = undefined;
     }
     const generation = this.generation;
@@ -183,8 +206,7 @@ export class DictationController {
         if (!current()) return; // Cancelled meanwhile; cancel() released the take.
         if (take) {
           this.take = undefined;
-          take.chunker.discard();
-          take.reservation.cancel();
+          this.release(take);
         }
         this.setState({ phase: "error", stage: "capture", cause });
         return;
@@ -221,8 +243,20 @@ export class DictationController {
   }
 
   private feed(take: Take, chunk: Float32Array): void {
+    if (take.filter) take.filter.push(chunk);
+    else this.feedStream(take, chunk);
+  }
+
+  private feedStream(take: Take, chunk: Float32Array, probs?: readonly number[]): void {
     // A failed stream feed falls back to submitting the whole recording.
-    try { take.chunker.push(chunk); } catch { /* The recording keeps the audio. */ }
+    try { take.chunker.push(chunk, probs); } catch { /* The recording keeps the audio. */ }
+  }
+
+  /** Drops a take that will never be submitted. */
+  private release(take: Take): void {
+    take.filter?.discard();
+    take.chunker.discard();
+    take.reservation.cancel();
   }
 
   private stopCapture(take: Take): Promise<CapturedAudio> {
@@ -248,30 +282,40 @@ export class DictationController {
     take.submission = this.stopCapture(take).then(async (captured) => {
       // Cancellation while the native microphone is stopping must never submit.
       if (this.take !== take || take.abort.signal.aborted) return undefined;
-      const { pcm } = captured;
+      const recorded = captured.pcm;
       const interruption = captured.interruption ?? take.interruption;
-      if (interruption && pcm.length === 0) throw interruption;
+      if (interruption && recorded.length === 0) throw interruption;
+      const pcm = take.filter ? await take.filter.finish() : recorded;
+      if (this.take !== take || take.abort.signal.aborted) return undefined;
       take.chunker.flush();
-      stage = "transcription";
-      logStep("transcribing", `${(pcm.length / CAPTURE_SAMPLE_RATE).toFixed(1)} s of audio`);
-      const text = await take.reservation.submit(pcm, take.abort.signal);
+      let text: string;
+      let warning: string | undefined;
+      if (take.filter && pcm.length === 0) {
+        take.reservation.cancel(); // No speech, nothing to transcribe.
+        text = "";
+      } else {
+        stage = "transcription";
+        logStep("transcribing", `${(pcm.length / CAPTURE_SAMPLE_RATE).toFixed(1)} s of audio`);
+        ({ text, warning } = await take.reservation.submit(pcm, take.abort.signal));
+      }
       if (this.disposed || this.take !== take || take.abort.signal.aborted) return undefined;
       const result = {
         text,
-        speechSeconds: pcm.length / CAPTURE_SAMPLE_RATE,
+        speechSeconds: recorded.length / CAPTURE_SAMPLE_RATE,
         transcribeSeconds: Math.max(0, (this.now() - stoppedAt) / 1000),
         ...(interruption ? { interruption } : {}),
         ...(captured.droppedFrames ? { droppedFrames: captured.droppedFrames } : {}),
+        ...(warning ? { warning } : {}),
       };
       this.take = undefined;
-      const empty = text ? "" : "; no speech detected";
-      log.info(
-        `transcribed ${result.speechSeconds.toFixed(1)} s of audio in ${result.transcribeSeconds.toFixed(1)} s${empty}`,
-      );
+      log.info(text
+        ? `transcribed ${(pcm.length / CAPTURE_SAMPLE_RATE).toFixed(1)} s of audio in ${result.transcribeSeconds.toFixed(1)} s`
+        : "no speech detected");
       logStep("idle");
       this.setState({ phase: "result", result });
       return result;
     }).catch((cause: unknown) => {
+      take.filter?.discard();
       take.reservation.cancel(); // Releases the lane if stop failed before submit.
       if (this.disposed || this.take !== take || take.abort.signal.aborted) return undefined;
       this.take = undefined;
@@ -291,8 +335,7 @@ export class DictationController {
     if (!take && !opening) return this.cleanup;
     if (take) {
       take.abort.abort();
-      take.chunker.discard();
-      take.reservation.cancel();
+      this.release(take);
     }
     if (opening) log.info("start cancelled");
     else if (take?.submission) log.info("transcription cancelled");

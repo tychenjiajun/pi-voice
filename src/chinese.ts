@@ -33,11 +33,8 @@ export function isChineseLanguage(language: string): boolean {
   return base === "zh" || base === "yue";
 }
 
-/**
- * CJK ranges worth converting: Ext A, the main block, compatibility ideographs,
- * and Ext B+ (surrogate pairs are matched by their lead code unit).
- */
-const HAN_CHARACTERS = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ud840-\ud87f]/;
+const HAN = /\p{Script=Han}/u;
+const KANA = /[\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
 /**
  * Remote ASR reports no detected language, so Chinese output is decided by
@@ -45,7 +42,21 @@ const HAN_CHARACTERS = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\ud840-\ud87f]/;
  * text (or the configured language is Chinese) to convert.
  */
 export function containsChineseCharacters(text: string): boolean {
-  return HAN_CHARACTERS.test(text);
+  return HAN.test(text);
+}
+
+/**
+ * Whether a transcript gets the Chinese script preference. The text decides,
+ * not language detection: on short clips the detector often says English for
+ * Mandarin, which used to leave the model's Simplified output unconverted.
+ * Kana means Japanese, whose kanji OpenCC would mangle (学→學, 図書館→图书馆).
+ */
+export function shouldConvertChinese(
+  text: string,
+  { chineseEnabled, language }: { chineseEnabled: boolean; language: string },
+): boolean {
+  if (!HAN.test(text) || KANA.test(text)) return false;
+  return chineseEnabled || isChineseLanguage(language);
 }
 
 export async function convertChineseOutput(

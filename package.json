@@ -15,7 +15,10 @@
   "files": [
     "src",
     "index.ts",
+    "catalog/catalog.json",
     "catalog/recommendations.json",
+    "models/silero-vad-v6.2-F32.gguf",
+    "models/README.md",
     "README.md",
     "LICENSE"
   ],
@@ -37,7 +40,6 @@
     "check": "tsc --noEmit",
     "test": "npm run check && node scripts/run-tests.mjs",
     "prepublishOnly": "npm test",
-    "catalog:generate": "node scripts/generate-catalog.mjs",
     "recommendations:generate": "node scripts/generate-recommendations.mjs",
     "catalog:verify": "node scripts/catalog-metadata.mjs",
     "catalog:update-metadata": "node scripts/catalog-metadata.mjs --write"
@@ -61,10 +63,10 @@
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "@handy-computer/recorder": "0.1.0",
+    "@handy-computer/recorder": "0.2.1",
     "@huggingface/hub": "2.15.0",
     "openai": "^7.31.0",
     "opencc-js": "^1.4.1",
-    "transcribe-cpp": "0.2.4"
+    "transcribe-cpp": "0.4.0"
   }
 }

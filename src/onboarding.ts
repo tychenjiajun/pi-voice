@@ -21,6 +21,7 @@ import {
   DEFAULT_MICROPHONE,
   settingsForModel,
   settingsRemoteOnly,
+  settingsWithPreferredLanguages,
   writeSettings,
   type BackendSettings,
   type ChineseOutput,
@@ -47,10 +48,12 @@ type SettingsOptions = NonNullable<Parameters<typeof settingsForModel>[2]>;
 function createSettingsActivation(
   options: () => SettingsOptions,
   onCommitted: (settings: TranscribeSettings) => void,
+  ctx: ExtensionContext,
 ) {
   return createModelActivation({
     buildSettings: (model, path) => settingsForModel(model.id, path, options()),
     onCommitted,
+    onWarning: (message) => ctx.ui.notify(message, "warning"),
   });
 }
 
@@ -67,6 +70,8 @@ type ModelSelectionOptions = {
   polishEnabled?: boolean;
   /** Preserved across the model re-pick; absent means the agent's current model. */
   polishModel?: PolishModelRef;
+  voiceActivityDetection?: boolean;
+  longformChunking?: boolean;
   /** Persists language changes made before this flow activates a model. */
   onPreferredLanguagesChange?: (languages: string[]) => Promise<void>;
   postActivation?: CatalogModelPostActivation;
@@ -94,11 +99,14 @@ export async function runModelSelection(
       backend: configured?.backend ?? options.backend,
       polishEnabled: configured?.polishEnabled ?? options.polishEnabled ?? false,
       polishModel: configured?.polishModel ?? options.polishModel,
+      voiceActivityDetection: configured?.voiceActivityDetection ?? options.voiceActivityDetection,
+      longformChunking: configured?.longformChunking ?? options.longformChunking,
     }),
     (settings) => {
       configured = settings;
       currentModelId = settings.model?.id;
     },
+    ctx,
   );
 
   // One pane switches between the models on disk and downloads new ones.
@@ -123,7 +131,7 @@ export async function runModelSelection(
     if (changed) {
       try {
         if (configured) {
-          const updated = { ...configured, preferredLanguages: changed.languages };
+          const updated = settingsWithPreferredLanguages(configured, changed.languages);
           await writeSettings(updated);
           configured = updated;
         } else {
@@ -225,10 +233,13 @@ export async function changeOnboardingModel(
       backend: current.backend,
       polishEnabled: current.polishEnabled,
       polishModel: current.polishModel,
+      voiceActivityDetection: current.voiceActivityDetection,
+      longformChunking: current.longformChunking,
     }),
     (settings) => {
       chosen = settings;
     },
+    ctx,
   );
 
   while (true) {
@@ -356,6 +367,7 @@ export async function runOnboarding(
       (settings) => {
         configured = settings;
       },
+      ctx,
     );
 
     let changeLanguages = false;

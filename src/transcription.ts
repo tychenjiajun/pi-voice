@@ -1,22 +1,28 @@
 import type {
+  BackendInfo,
   Capabilities,
+  LangIdResult,
   Session,
   Stream,
   TranscribeModel,
 } from "transcribe-cpp";
-import { convertChineseOutput, isChineseLanguage } from "./chinese.js";
-import { writeLog, type LogLevel } from "./log.js";
+import { convertChineseOutput, shouldConvertChinese } from "./chinese.js";
+import { describeError, log, writeLog, type LogLevel } from "./log.js";
 import type { ChineseOutput } from "./settings.js";
 
 export type TranscriptionOptions = {
   signal?: AbortSignal;
   language?: string;
   chineseOutput?: ChineseOutput;
+  /** Chinese is a preferred or chosen language: convert any Chinese text. */
+  chineseEnabled?: boolean;
 };
 
 export type DictationStream = {
-  feed(chunk: Float32Array): Promise<void>;
-  finalize(): Promise<string>;
+  /** `probs` are the chunk's Silero frame probabilities, when the take has them. */
+  feed(chunk: Float32Array, probs?: readonly number[]): Promise<void>;
+  /** `audio` is the whole take, for a stream that checks it saw all of it. */
+  finalize(audio?: Float32Array): Promise<string>;
   reset(): void;
 };
 
@@ -33,18 +39,18 @@ function validateLanguage(
 
 /**
  * Shared final step for batch and streaming output: trim, then apply the
- * Chinese script preference when the detected (or configured) language is
- * Chinese. Keeping this in one place keeps the two paths from drifting.
+ * Chinese script preference (see shouldConvertChinese). Keeping this in one
+ * place keeps the two paths from drifting.
  */
 async function finishTranscript(
   text: string,
   detectedLanguage: string,
-  configuredLanguage: string | undefined,
-  chineseOutput: ChineseOutput,
+  options: TranscriptionOptions,
 ): Promise<string> {
   const trimmed = text.trim();
-  return isChineseLanguage(detectedLanguage || configuredLanguage || "")
-    ? convertChineseOutput(trimmed, chineseOutput)
+  const language = detectedLanguage || options.language || "";
+  return shouldConvertChinese(trimmed, { chineseEnabled: options.chineseEnabled ?? false, language })
+    ? convertChineseOutput(trimmed, options.chineseOutput ?? "simplified")
     : trimmed;
 }
 
@@ -54,8 +60,7 @@ class TranscribeCppDictationStream implements DictationStream {
   constructor(
     private readonly session: Session,
     private readonly stream: Stream,
-    private readonly language: string | undefined,
-    private readonly chineseOutput: ChineseOutput,
+    private readonly options: TranscriptionOptions,
   ) {}
 
   async feed(chunk: Float32Array): Promise<void> {
@@ -80,7 +85,7 @@ class TranscribeCppDictationStream implements DictationStream {
       this.close();
     }
 
-    return finishTranscript(text, detectedLanguage, this.language, this.chineseOutput);
+    return finishTranscript(text, detectedLanguage, this.options);
   }
 
   reset(): void {
@@ -103,30 +108,60 @@ const TRANSCRIBE_LEVELS: Record<number, LogLevel> = { 1: "debug", 2: "warn", 3: 
 const TRANSCRIBE_CONTINUATION = 5;
 let lastTranscribeLevel: LogLevel = "debug";
 
-function routeTranscribeLog(setLogHandler: typeof import("transcribe-cpp").setLogHandler): void {
+export function routeTranscribeLog(setLogHandler: typeof import("transcribe-cpp").setLogHandler): void {
   setLogHandler((level, message) => {
     if (level !== TRANSCRIBE_CONTINUATION) lastTranscribeLevel = TRANSCRIBE_LEVELS[level] ?? "debug";
     writeLog(lastTranscribeLevel, "transcribe", message);
   });
 }
 
-/** A reusable loaded transcribe.cpp model. Calls must be scheduled sequentially. */
+type TranscribeCppRuntime = Pick<
+  typeof import("transcribe-cpp"),
+  "getAvailableBackends" | "OutOfMemory" | "setLogHandler" | "TranscribeModel"
+>;
+
+type RuntimeLoader = () => Promise<TranscribeCppRuntime>;
+
+// Best-effort: load failures don't report their device, so any non-CPU device is assumed to have been used.
+function cpuFallbackDevice(runtime: TranscribeCppRuntime): BackendInfo | undefined {
+  const devices = runtime.getAvailableBackends();
+  const acceleratorAvailable = devices.some((device) => device.deviceType !== "cpu");
+  return acceleratorAvailable
+    ? devices.find((device) => device.deviceType === "cpu")
+    : undefined;
+}
+
+/**
+ * A reusable loaded transcribe.cpp model: an ASR model, or the language
+ * detector. Calls must be scheduled sequentially.
+ */
 export class TranscribeCppBackend {
   private model: TranscribeModel | undefined;
   private loading: Promise<TranscribeModel> | undefined;
   private disposed = false;
 
-  constructor(private readonly modelPath: string) {}
+  constructor(
+    private readonly modelPath: string,
+    private readonly loadRuntime: RuntimeLoader = () => import("transcribe-cpp"),
+  ) {}
 
   async prepare(): Promise<void> {
     if (this.model) return;
     if (this.disposed) throw new Error("Transcription backend has been disposed");
 
     if (!this.loading) {
-      this.loading = import("transcribe-cpp")
-        .then(({ TranscribeModel, setLogHandler }) => {
-          routeTranscribeLog(setLogHandler);
-          return TranscribeModel.load(this.modelPath);
+      this.loading = this.loadRuntime()
+        .then(async (runtime) => {
+          routeTranscribeLog(runtime.setLogHandler);
+          try {
+            return await runtime.TranscribeModel.load(this.modelPath);
+          } catch (error) {
+            if (!(error instanceof runtime.OutOfMemory)) throw error;
+            const cpu = cpuFallbackDevice(runtime);
+            if (!cpu) throw error;
+            log.warn(`accelerator model load ran out of memory; retrying on CPU: ${describeError(error)}`);
+            return runtime.TranscribeModel.load(this.modelPath, { device: cpu });
+          }
         })
         .then((model) => {
           if (this.disposed) {
@@ -163,8 +198,7 @@ export class TranscribeCppBackend {
       return new TranscribeCppDictationStream(
         session,
         stream,
-        options.language,
-        options.chineseOutput ?? "simplified",
+        options,
       );
     } catch (error) {
       session.dispose();
@@ -189,9 +223,23 @@ export class TranscribeCppBackend {
     return finishTranscript(
       result.text,
       result.language,
-      options.language,
-      options.chineseOutput ?? "simplified",
+      options,
     );
+  }
+
+  /** Rank `allowed` detector labels for one clip (a "langid" model only). */
+  async identifyLanguage(
+    pcm: Float32Array,
+    allowed: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<LangIdResult> {
+    await this.prepare();
+    const session = this.model!.createLangIdSession();
+    try {
+      return await session.run(pcm, { allowed, signal });
+    } finally {
+      session.dispose();
+    }
   }
 
   async dispose(): Promise<void> {

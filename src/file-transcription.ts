@@ -25,6 +25,7 @@ type FileTranscriptionDetails = {
   seconds: number;
   truncation?: TruncationResult;
   fullTranscriptPath?: string;
+  warning?: string;
 };
 
 type FileTranscriptionOptions = {
@@ -155,7 +156,7 @@ export function registerFileTranscriptionTool(
                 seconds: audio.seconds,
               },
             });
-            const rawTranscript = await service.transcribeFile(
+            const { text: rawTranscript, warning } = await service.transcribeFile(
               configured,
               audio.pcm,
               operationSignal,
@@ -173,14 +174,16 @@ export function registerFileTranscriptionTool(
               inputPath,
               modelId: modelLabel,
               seconds: audio.seconds,
+              ...(warning ? { warning } : {}),
             };
+            const warningText = warning ? `\n\n[Language detection: ${warning}]` : "";
 
             if (!transcript) {
               return {
                 content: [
                   {
                     type: "text" as const,
-                    text: `No speech detected in ${audio.seconds.toFixed(1)}s of audio from ${inputPath}`,
+                    text: `No speech detected in ${audio.seconds.toFixed(1)}s of audio from ${inputPath}${warningText}`,
                   },
                 ],
                 details,
@@ -204,7 +207,7 @@ export function registerFileTranscriptionTool(
             }
 
             return {
-              content: [{ type: "text" as const, text: resultText }],
+              content: [{ type: "text" as const, text: resultText + warningText }],
               details,
             };
           }, operationSignal);

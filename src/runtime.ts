@@ -15,6 +15,7 @@ import { polishTranscript } from "./polish.js";
 import type { TranscribeSettings } from "./settings.js";
 import { displayShortcut } from "./shortcut-core.js";
 import { TranscriptionService } from "./transcription-service.js";
+import { VoiceActivityDetection } from "./vad.js";
 import type { RecordingMeter } from "./visualizer.js";
 
 type ActiveRecording = {
@@ -67,7 +68,8 @@ export function createPiVoiceRuntime(
   let settingsWarningShown = false;
   let audioModulePromise: Promise<typeof import("./audio.js")> | undefined;
   let visualizerModulePromise: Promise<typeof import("./visualizer.js")> | undefined;
-  const transcriptionService = new TranscriptionService();
+  const voiceActivity = new VoiceActivityDetection();
+  const transcriptionService = new TranscriptionService(undefined, (pcm, signal) => voiceActivity.scoreClip(pcm, signal));
 
   function loadAudio(): Promise<typeof import("./audio.js")> {
     return (audioModulePromise ??= import("./audio.js"));
@@ -150,6 +152,8 @@ export function createPiVoiceRuntime(
       backend: previous.backend,
       polishEnabled: previous.polishEnabled,
       polishModel: previous.polishModel,
+      voiceActivityDetection: previous.voiceActivityDetection,
+      longformChunking: previous.longformChunking,
       postActivation: "advance",
     });
     if (configured) rememberSettings(configured);
@@ -294,6 +298,7 @@ export function createPiVoiceRuntime(
     try {
       const result = await active.dictation.stop();
       if (shuttingDown) return;
+      if (result?.warning) ctx.ui.notify(result.warning, "warning");
       if (!result) {
         await reportDictationError(ctx, active.dictation);
       } else if (result.text) {
@@ -355,6 +360,7 @@ export function createPiVoiceRuntime(
       openCapture: openMicrophone,
       onAudio: (chunk) => meter.push(chunk),
       onChange: updateMeter,
+      createSpeechFilter: (settings, onSpeech) => voiceActivity.createFilter(settings, onSpeech),
     });
     function updateMeter(): void {
       meter.update({ modelState: controller.modelState, microphoneStopped: controller.interruption !== undefined });
@@ -514,6 +520,8 @@ export function createPiVoiceRuntime(
       operation?.catch(() => undefined),
       transcriptionService.shutdown().catch(() => undefined),
     ]);
+    // After the dictation, so no recording still holds a VAD session.
+    await voiceActivity.dispose().catch(() => undefined);
     recording = undefined;
     dictation = undefined;
     if (visualizerModulePromise) {
