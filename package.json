@@ -1,14 +1,14 @@
 {
   "name": "@tychenjiajun/pi-voice",
-  "version": "0.8.0",
-  "description": "Speech-to-text for Pi (local model or OpenAI-compatible remote ASR, compaction-style post-processing)",
+  "version": "0.8.1",
+  "description": "Speech-to-text for the Pi coding agent: press a shortcut and dictate — transcripts land directly in your chat. Local models (Whisper, Parakeet) or any OpenAI-compatible remote ASR endpoint, with compaction-style post-processing that strips fillers.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tychenjiajun/pi-voice.git"
   },
-  "homepage": "https://github.com/tychenjiajun/pi-voice#readme",
+  "homepage": "https://pi.dev/packages/@tychenjiajun/pi-voice",
   "bugs": {
     "url": "https://github.com/tychenjiajun/pi-voice/issues"
   },
@@ -19,6 +19,7 @@
     "catalog/recommendations.json",
     "models/silero-vad-v6.2-F32.gguf",
     "models/README.md",
+    "assets",
     "README.md",
     "LICENSE"
   ],
@@ -31,7 +32,13 @@
     "voice",
     "dictation",
     "transcription",
-    "speech-to-text"
+    "speech-to-text",
+    "asr",
+    "whisper",
+    "openai-compatible",
+    "voice-input",
+    "voice-control",
+    "local-model"
   ],
   "engines": {
     "node": ">=22"
@@ -47,7 +54,9 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/tychenjiajun/pi-voice/remote-asr-backend/assets/preview.png",
+    "video": "https://raw.githubusercontent.com/tychenjiajun/pi-voice/remote-asr-backend/assets/demo.mp4"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
