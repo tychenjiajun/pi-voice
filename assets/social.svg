@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="@tychenjiajun/pi-voice social card">
+  <defs>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="1" r="0.9">
+      <stop offset="0" stop-color="#7c3aed" stop-opacity="0.30"/>
+      <stop offset="0.6" stop-color="#7c3aed" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+      <path d="M50 0H0v50" fill="none" stroke="#ffffff" stroke-opacity="0.05" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0d0d12"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+
+  <rect x="80" y="72" rx="8" width="260" height="50" fill="#7c3aed" fill-opacity="0.18" stroke="#7c3aed"/>
+  <text x="210" y="107" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="27" fill="#c4b5fd">pi-extension</text>
+
+  <g transform="translate(600 218)">
+    <circle cx="0" cy="0" r="48" fill="#7c3aed" fill-opacity="0.18" stroke="#7c3aed" stroke-width="3"/>
+    <rect x="-12" y="-33" width="24" height="42" rx="12" fill="#a78bfa"/>
+    <path d="M-24 -2 a24 24 0 0 0 48 0" fill="none" stroke="#a78bfa" stroke-width="5" stroke-linecap="round"/>
+    <line x1="0" y1="22" x2="0" y2="39" stroke="#a78bfa" stroke-width="5" stroke-linecap="round"/>
+  </g>
+
+  <text x="600" y="360" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="92" font-weight="700" fill="#ffffff">pi-voice</text>
+  <text x="600" y="406" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="28" fill="#8b8b9e">@tychenjiajun/pi-voice</text>
+  <text x="600" y="462" text-anchor="middle" font-family="system-ui, sans-serif" font-size="36" fill="#c9c9d4">Speech-to-text for Pi &#8212; local model or remote ASR</text>
+
+  <rect x="216" y="510" rx="12" width="768" height="70" fill="#16161d" stroke="url(#accent)" stroke-width="3"/>
+  <text x="600" y="556" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="29" fill="#a78bfa">$ pi install npm:@tychenjiajun/pi-voice</text>
+</svg>

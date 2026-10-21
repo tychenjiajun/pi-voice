@@ -4,6 +4,14 @@ Speech-to-text for Pi — on-device model or OpenAI-compatible remote ASR, with 
 
 Press a keyboard shortcut, talk, and the resulting transcript will be put directly into your chat.
 
+![pi-voice promo card](https://raw.githubusercontent.com/tychenjiajun/pi-voice/remote-asr-backend/assets/preview.png)
+
+![pi-voice demo: dictate, transcript lands in your session](https://raw.githubusercontent.com/tychenjiajun/pi-voice/remote-asr-backend/assets/demo.gif)
+
+[![pi-extension](https://img.shields.io/badge/pi-extension-7c3aed)](https://pi.dev/docs/latest/packages) [![npm version](https://img.shields.io/npm/v/%40tychenjiajun%2Fpi-voice)](https://www.npmjs.com/package/@tychenjiajun/pi-voice) [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+Browse more Pi packages in the [pi.dev packages gallery](https://pi.dev/packages/@tychenjiajun/pi-voice) and read the [Pi packages documentation](https://pi.dev/docs/latest/packages).
+
 > **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) in an exclusive local-only or remote-only setup, plus compaction-style post-processing that refines a transcript with Pi's own model. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
 
 ## Install
@@ -113,6 +121,24 @@ export PI_VOICE_FFMPEG_PATH=/path/to/ffmpeg
 The legacy `PI_TRANSCRIBE_FFMPEG_PATH` variable remains supported when `PI_VOICE_FFMPEG_PATH` is not set.
 
 When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance to the agent. The agent should ask before running a package-manager command. Model setup is still explicit: run `/voice-settings` once in the interactive TUI to choose a mode and, in local mode, confirm the download of a local model.
+
+## FAQ
+
+### What models does it support?
+
+Local mode downloads GGUF ASR models from a built-in catalog — Whisper (e.g. `whisper-medium`), Parakeet, Canary, Nemotron, Qwen3-ASR and more, picked via a fuzzy-searchable `/voice-settings` model picker. Remote mode works with **any** endpoint that speaks the OpenAI chat-completions `input_audio` dialect (OpenAI, Groq, self-hosted servers, …).
+
+### Does audio leave my machine?
+
+Not unless you configure remote mode. With a local model, recording and transcription happen entirely on-device. If you switch **Transcription backend** to **Remote ASR**, the 16 kHz mono WAV clip is sent to *your* endpoint — the API key is read from an env var you name and is never stored in settings.
+
+### How is this different from `@earendil-works/pi-voice`?
+
+This fork adds a remote ASR backend (exclusive local-only or remote-only setup) and compaction-style post-processing that refines transcripts with Pi's own model — stripping filler words, fixing punctuation and capitalisation. See the [changelog](#changelog).
+
+### Do I need FFmpeg?
+
+Only for the `transcribe_file` tool (transcribing existing audio/video files). Microphone dictation works without it. Install hints for macOS, Debian/Ubuntu and Windows are in [File transcription and FFmpeg](#file-transcription-and-ffmpeg).
 
 ## Changelog
 
