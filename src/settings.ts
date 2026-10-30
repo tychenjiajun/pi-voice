@@ -177,11 +177,20 @@ function normalizePolishModel(value: unknown): PolishModelRef | undefined {
   return { provider: value.provider.trim(), id: value.id.trim() };
 }
 
-/** A blank or non-string prompt means "use the built-in one", so it is dropped. */
+/** A custom prompt replaces the whole system prompt, so keep it to a sane size. */
+export const MAX_POLISH_PROMPT_LENGTH = 20_000;
+
+/**
+ * A blank or non-string prompt means "use the built-in one", so it is dropped.
+ * So is one over the cap: the value would become a model system prompt, and the
+ * editor never writes one that large, so it can only come from a hand-edited
+ * file.
+ */
 function normalizePolishPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const prompt = value.trim();
-  return prompt ? prompt : undefined;
+  if (!prompt || prompt.length > MAX_POLISH_PROMPT_LENGTH) return undefined;
+  return prompt;
 }
 
 function validateModelValue(

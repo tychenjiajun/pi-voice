@@ -1,6 +1,6 @@
 {
   "name": "@tychenjiajun/pi-voice",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Speech-to-text for the Pi coding agent: press a shortcut and dictate — transcripts land directly in your chat. Local models (Whisper, Parakeet) or any OpenAI-compatible remote ASR endpoint, with compaction-style post-processing that strips fillers.",
   "type": "module",
   "license": "MIT",

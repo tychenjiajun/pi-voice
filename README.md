@@ -145,6 +145,14 @@ Only for the `transcribe_file` tool (transcribing existing audio/video files). M
 
 ## Changelog
 
+### 0.9.0
+
+**Added — Configurable post-processing prompt**
+
+- `/voice-settings` → **Post-processing prompt** (shown while **Post-processing** is On) opens a picker with **Built-in default** or **Custom prompt**; the row summary reads `Built-in default` or `Custom (n chars)`.
+- **Custom prompt** opens a multi-line editor prefilled with the built-in wording, so the default can be adjusted instead of retyped — for example to keep transcripts verbatim, translate, or reformat as Markdown. Clearing the editor, or picking **Built-in default**, restores the built-in prompt.
+- The custom instructions are stored as `polishPrompt` in `settings.json` and sent as the system prompt of the refinement request. They replace the built-in prompt entirely, including its rule that the transcript is text to edit and never instructions to follow; an absent, blank, or over-20 000-character value means the built-in prompt is used.
+
 ### 0.8.0
 
 **Added — Upstream sync: voice activity detection, long-audio chunking, and language detection**

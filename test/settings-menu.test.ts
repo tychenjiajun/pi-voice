@@ -5,24 +5,32 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   initTheme,
+  type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
+import { CATALOG_MODELS, LANGUAGE_DETECTION_MODEL } from "../src/catalog.js";
+import { Deferred } from "../src/deferred.js";
+import { CatalogModelPicker } from "../src/model-picker.js";
 import {
   choosePolishModel,
   choosePolishPromptSource,
   editPostProcessingPrompt,
-  MAX_POLISH_PROMPT_LENGTH,
   settingsHomeChoices,
+  showSettingsMenu,
 } from "../src/settings-menu.js";
 import { POLISH_SYSTEM_PROMPT } from "../src/polish.js";
 import {
+  MAX_POLISH_PROMPT_LENGTH,
   readSettings,
   settingsForModel,
   settingsRemoteOnly,
+  writeSettings,
   type PolishModelRef,
   type TranscribeSettings,
 } from "../src/settings.js";
 import { SingleSelectPicker } from "../src/ui-components.js";
+import { cacheCatalogModel, isolatedModelCache } from "./model-cache-helper.js";
 import { keybindings, testTheme, testTui } from "./ui-helpers.js";
 
 initTheme("dark");
@@ -256,10 +264,17 @@ function postProcessingPromptRow(settings: TranscribeSettings) {
 }
 
 test("the post-processing prompt row reports the built-in default and custom prompts", () => {
-  const base = configured(ENGLISH_ONLY, ["en"]);
+  const base = { ...configured(ENGLISH_ONLY, ["en"]), polishEnabled: true };
   assert.equal(postProcessingPromptRow(base)?.summary, "Built-in default");
   const custom = { ...base, polishPrompt: "Only fix punctuation." };
   assert.equal(postProcessingPromptRow(custom)?.summary, "Custom (21 chars)");
+});
+
+test("the post-processing prompt row follows the post-processing toggle", () => {
+  const off = configured(ENGLISH_ONLY, ["en"]);
+  assert.equal(off.polishEnabled, false);
+  assert.ok(!rowValues(off).includes("post-processing-prompt"));
+  assert.ok(rowValues({ ...off, polishEnabled: true }).includes("post-processing-prompt"));
 });
 
 type PickerContext = {
@@ -416,6 +431,24 @@ test("choosing the built-in prompt drops a stored custom one", async (t) => {
   assert.equal((await readSettings()).settings?.polishPrompt, undefined);
 });
 
+test("saving the prefilled built-in prompt unchanged keeps the default", async (t) => {
+  // The editor opens on the built-in wording, so confirming it unchanged must
+  // not persist a copy that would label the row "Custom".
+  const { ctx, notifications } = promptFlow(t, {
+    source: "custom",
+    editor: `\n  ${POLISH_SYSTEM_PROMPT} \n`,
+  });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishEnabled: true,
+  });
+  assert.equal(await editPostProcessingPrompt(ctx, configured), false);
+  assert.equal(configured.polishPrompt, undefined);
+  assert.equal((await readSettings()).settings?.polishPrompt, undefined);
+  assert.equal(postProcessingPromptRow(configured)?.summary, "Built-in default");
+  assert.deepEqual(notifications, []);
+});
+
 test("an unchanged or cancelled prompt edit saves nothing", async (t) => {
   const unchanged = promptFlow(t, {
     source: "custom",
@@ -451,3 +484,144 @@ test("an over-long prompt is rejected instead of stored", async (t) => {
   assert.match(notifications.at(-1)?.message ?? "", /too long/);
   assert.equal(notifications.at(-1)?.type, "error");
 });
+
+type Step = (pane: Component, done: (value: unknown) => void) => void;
+
+/** Drive showSettingsMenu like a user, one pane at a time. */
+function scriptedContext(steps: Step[]) {
+  let index = 0;
+  const notifications: Array<{ message: string; type?: string }> = [];
+  const ctx = {
+    mode: "tui",
+    ui: {
+      custom: async (factory: Parameters<ExtensionContext["ui"]["custom"]>[0]) => {
+        const result = new Deferred<unknown>();
+        const pane = await factory(
+          testTui(24), testTheme(), keybindings() as Parameters<typeof factory>[2],
+          (value) => result.resolve(value),
+        );
+        try {
+          const step = steps[index++];
+          assert.ok(step, `Unexpected pane: ${pane.constructor.name}`);
+          step(pane, (value) => result.resolve(value));
+          return await result.promise;
+        } finally {
+          pane.dispose?.();
+        }
+      },
+      notify: (message: string, type?: string) => { notifications.push({ message, type }); },
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, notifications, assertFinished: () => assert.equal(index, steps.length) };
+}
+
+/** Settings directory plus a cached catalog model the pickers may select. */
+function settingsMenuFlow(t: TestContext) {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "pi-voice-settings-flow-test-"));
+  process.env.PI_CODING_AGENT_DIR = directory;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  });
+  const cache = isolatedModelCache(t);
+  cacheCatalogModel(cache, LANGUAGE_DETECTION_MODEL);
+  cacheCatalogModel(
+    cache,
+    CATALOG_MODELS.find((model) => model.id === "parakeet-unified-en-0.6b")!,
+  );
+}
+
+test("switching the backend to local keeps a custom post-processing prompt", async (t) => {
+  settingsMenuFlow(t);
+  const prompt = "Only fix punctuation; keep the speaker's wording.";
+  const configured = settingsRemoteOnly({
+    shortcut: "ctrl+alt+z",
+    preferredLanguages: ["en"],
+    backend: {
+      type: "openai-asr",
+      baseUrl: "https://asr.example.com/v1",
+      model: "whisper-test",
+      apiKeyEnv: "PI_VOICE_TEST_KEY",
+    },
+    polishEnabled: true,
+    polishPrompt: prompt,
+  });
+  await writeSettings(configured);
+
+  const script = scriptedContext([
+    // Local mode needs a model, so the backend row detours through the picker.
+    (pane) => pickRow(pane, "backend"),
+    (pane, done) => {
+      assert.ok(pane instanceof SingleSelectPicker, pane.constructor.name);
+      done("transcribe-cpp");
+    },
+    (pane) => pickModel(pane, "parakeet"),
+    (pane) => pane.handleInput?.("\x1b"),
+  ]);
+  assert.equal(await showSettingsMenu({} as ExtensionAPI, script.ctx, configured, "ctrl+alt+z"), false);
+  script.assertFinished();
+
+  const saved = (await readSettings()).settings;
+  assert.equal(saved?.backend.type, "transcribe-cpp");
+  assert.equal(saved?.polishPrompt, prompt);
+  assert.equal(configured.polishPrompt, prompt);
+  assert.equal(configured.backend.type, "transcribe-cpp");
+});
+
+test("switching the backend to remote keeps a custom post-processing prompt", async (t) => {
+  settingsMenuFlow(t);
+  const prompt = "Only fix punctuation; keep the speaker's wording.";
+  const configured = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    preferredLanguages: ["en"],
+    polishEnabled: true,
+    polishPrompt: prompt,
+  });
+  await writeSettings(configured);
+
+  const script = scriptedContext([
+    (pane) => pickRow(pane, "backend"),
+    (pane, done) => {
+      assert.ok(pane instanceof SingleSelectPicker, pane.constructor.name);
+      done("openai-asr");
+    },
+    (_pane, done) => done("https://asr.example.com/v1"),
+    (_pane, done) => done("whisper-test"),
+    (_pane, done) => done("PI_VOICE_TEST_KEY"),
+    (pane) => pane.handleInput?.("\x1b"),
+  ]);
+  process.env.PI_VOICE_TEST_KEY = "test-key";
+  t.after(() => { delete process.env.PI_VOICE_TEST_KEY; });
+  await showSettingsMenu({} as ExtensionAPI, script.ctx, configured, "ctrl+alt+z");
+  script.assertFinished();
+
+  const saved = (await readSettings()).settings;
+  assert.equal(saved?.backend.type, "openai-asr");
+  assert.equal(saved?.polishPrompt, prompt);
+  assert.equal(configured.polishPrompt, prompt);
+});
+
+/** Move the settings-home cursor onto a row and open it. */
+function pickRow(pane: Component, value: string): void {
+  assert.ok(pane instanceof SingleSelectPicker, pane.constructor.name);
+  const state = pane as unknown as {
+    filtered: Array<{ value: string }>;
+    selectedIndex: number;
+  };
+  const index = state.filtered.findIndex((choice) => choice.value === value);
+  assert.ok(index >= 0, `settings row ${value} is missing`);
+  for (let step = state.selectedIndex; step < index; step += 1) pane.handleInput("\x1b[B");
+  pane.handleInput("\r");
+}
+
+/** Type a query into the catalog picker, select the match, then close it. */
+function pickModel(pane: Component, query: string): void {
+  assert.ok(pane instanceof CatalogModelPicker, pane.constructor.name);
+  for (const char of query) pane.handleInput(char);
+  pane.handleInput("\r");
+  // The first Esc clears the search, the second leaves once the save lands.
+  pane.handleInput("\x1b");
+  pane.handleInput("\x1b");
+}

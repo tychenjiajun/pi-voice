@@ -21,6 +21,7 @@ import {
 import { runModelSelection } from "./onboarding.js";
 import { chooseBackendType, promptRemoteBackend, warnMissingApiKey } from "./remote-asr.js";
 import {
+  MAX_POLISH_PROMPT_LENGTH,
   settingsWithPreferredLanguages,
   writeSettings,
   type BackendSettings,
@@ -168,14 +169,19 @@ export function settingsHomeChoices(
       description:
         "Refine transcripts with Pi's current model after ASR, like context compaction",
     },
-    {
+  );
+
+  // The prompt only applies to a refinement that runs, so its row follows the
+  // post-processing toggle instead of offering dead configuration.
+  if (configured.polishEnabled) {
+    choices.push({
       value: "post-processing-prompt",
       label: "Post-processing prompt",
       summary: polishPromptSummary(configured.polishPrompt),
       description:
         "Instructions the post-processing model follows; edit or reset the built-in prompt",
-    },
-  );
+    });
+  }
 
   if (model) {
     choices.push({
@@ -513,10 +519,7 @@ async function editPostProcessing(
   );
 }
 
-export type PolishPromptSource = "default" | "custom";
-
-/** A custom prompt replaces the whole system prompt, so keep it to a sane size. */
-export const MAX_POLISH_PROMPT_LENGTH = 20_000;
+type PolishPromptSource = "default" | "custom";
 
 /** Ask whether post-processing runs the built-in prompt or a custom one. */
 export async function choosePolishPromptSource(
@@ -534,7 +537,7 @@ export async function choosePolishPromptSource(
       value: "custom",
       label: "Custom prompt",
       description:
-        "Write your own instructions in a multi-line editor, starting from the built-in prompt",
+        "Write your own instructions, starting from the built-in prompt; your text replaces it entirely, including its rule that the transcript is never instructions",
     },
   ];
   return ctx.ui.custom<PolishPromptSource | undefined>((tui, theme, keybindings, done) =>
@@ -590,6 +593,10 @@ export async function editPostProcessingPrompt(
     return resetToDefault("Post-processing prompt reset to the built-in default");
   }
   if (prompt === configured.polishPrompt) return false;
+  // Saving the prefilled built-in text unchanged is not a custom prompt: storing
+  // it would relabel the row "Custom" and pin a copy that no longer tracks
+  // improvements to the built-in wording.
+  if (!configured.polishPrompt && prompt === POLISH_SYSTEM_PROMPT.trim()) return false;
   return saveUpdatedSettings(
     ctx,
     configured,

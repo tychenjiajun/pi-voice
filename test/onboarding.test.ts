@@ -129,6 +129,40 @@ for (const entry of ["recommended", "other-models", "single-pick"] as const) {
   });
 }
 
+test("a custom post-processing prompt survives the Try it model re-pick", async (t) => {
+  isolatedSettings(t);
+  const cache = isolatedModelCache(t);
+  cacheCatalogModel(cache, LANGUAGE_DETECTION_MODEL);
+  const current = {
+    ...initialSettings(),
+    polishEnabled: true,
+    polishPrompt: "Only fix punctuation; keep the speaker's wording.",
+  };
+  await writeSettings(current);
+  const next = CATALOG_MODELS.find((model) => model.id === "parakeet-tdt-0.6b-v3")!;
+  cacheCatalogModel(cache, next);
+
+  const script = scriptedContext([
+    (pane) => {
+      assert.ok(pane instanceof RecommendedModelPicker);
+      pane.handleInput("o");
+    },
+    (pane) => {
+      assert.ok(pane instanceof CatalogModelPicker);
+      for (const char of "parakeet") pane.handleInput(char);
+      pane.handleInput("\r");
+    },
+  ]);
+  const result = await changeOnboardingModel(script.ctx, current);
+  script.assertFinished();
+
+  assert.ok(result);
+  assert.equal(result.model?.id, next.id);
+  assert.equal(result.polishPrompt, current.polishPrompt);
+  assert.equal(result.polishEnabled, true);
+  assert.equal((await readSettings()).settings?.polishPrompt, current.polishPrompt);
+});
+
 test("a root catalog stays root when another cached model appears while it is open", async (t) => {
   isolatedSettings(t);
   const cache = isolatedModelCache(t);

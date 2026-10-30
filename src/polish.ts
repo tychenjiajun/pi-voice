@@ -15,7 +15,9 @@ import type { PolishModelRef } from "./settings.js";
  * reasoning tags are stripped from the refined text.
  *
  * The instructions can be replaced from settings (`polishPrompt`); the built-in
- * prompt below remains the default and the starting point for editing.
+ * prompt below remains the default and the starting point for editing. A custom
+ * prompt is the whole system prompt, so it also takes over rule 5 of the
+ * built-in one: the transcript is text to edit, never instructions to follow.
  */
 
 export const POLISH_SYSTEM_PROMPT = `# Role
@@ -81,7 +83,11 @@ export type PolishRequest = {
   enabled: boolean;
   /** Explicit model override; absent uses the agent's current model. */
   modelRef?: PolishModelRef;
-  /** Replaces the built-in prompt; absent or blank uses POLISH_SYSTEM_PROMPT. */
+  /**
+   * The whole system prompt when set; absent or blank uses POLISH_SYSTEM_PROMPT.
+   * A custom value replaces the built-in prompt entirely, including its rule that
+   * treats the transcript as text and never as instructions.
+   */
   prompt?: string;
   signal?: AbortSignal;
 };

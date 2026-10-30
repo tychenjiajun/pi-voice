@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  MAX_POLISH_PROMPT_LENGTH,
   readSettings,
   settingsForModel,
   settingsRemoteOnly,
@@ -89,6 +90,27 @@ test("a custom post-processing prompt survives model selection", () => {
     shortcut: "ctrl+alt+z",
   });
   assert.equal("polishPrompt" in plain, false, "absent means the built-in prompt");
+});
+
+test("a post-processing prompt over the cap is dropped on read", async (t) => {
+  isolatedSettings(t);
+  const base = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishEnabled: true,
+  });
+
+  // At the cap the prompt is kept verbatim; one character more only comes from
+  // a hand-edited file, and is dropped so it never becomes a system prompt.
+  const atCap = "x".repeat(MAX_POLISH_PROMPT_LENGTH);
+  await writeSettings({ ...base, polishPrompt: atCap });
+  assert.equal((await readSettings()).settings?.polishPrompt, atCap);
+
+  await writeSettings({ ...base, polishPrompt: "x".repeat(MAX_POLISH_PROMPT_LENGTH + 1) });
+  const { settings, warning } = await readSettings();
+  assert.equal(warning, undefined);
+  assert.equal(settings?.polishPrompt, undefined);
+  assert.equal("polishPrompt" in (settings ?? {}), false, "the built-in prompt applies");
+  assert.equal(settings?.polishEnabled, true, "only the prompt is dropped");
 });
 
 test("selecting a local model drops any remote configuration", () => {
