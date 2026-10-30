@@ -58,6 +58,8 @@ export type TranscribeSettings = {
   polishEnabled?: boolean;
   /** Optional post-processing model override; absent uses the agent's current model. */
   polishModel?: PolishModelRef;
+  /** Optional post-processing instructions; absent uses the built-in prompt. */
+  polishPrompt?: string;
   /** Transcribe only the speech in a recording, not its silence and noise. */
   voiceActivityDetection: boolean;
   /** Hidden, settings.json only: false decodes long audio in one piece, without voice activity cuts. */
@@ -175,6 +177,13 @@ function normalizePolishModel(value: unknown): PolishModelRef | undefined {
   return { provider: value.provider.trim(), id: value.id.trim() };
 }
 
+/** A blank or non-string prompt means "use the built-in one", so it is dropped. */
+function normalizePolishPrompt(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const prompt = value.trim();
+  return prompt ? prompt : undefined;
+}
+
 function validateModelValue(
   value: unknown,
 ): { id: string; path: string; catalogModel: CatalogModel } | undefined {
@@ -203,6 +212,7 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
   const microphone = validateMicrophone(value.microphone);
   if (!preferredLanguages || !microphone) return undefined;
   const polishModel = normalizePolishModel(value.polishModel);
+  const polishPrompt = normalizePolishPrompt(value.polishPrompt);
 
   // The remote endpoint detects the language itself; the stored language only
   // triggers Chinese script conversion, so any previous value is kept as-is.
@@ -227,6 +237,7 @@ function validateSettings(value: unknown): TranscribeSettings | undefined {
     microphone,
     polishEnabled: value.polishEnabled === true,
     ...(polishModel ? { polishModel } : {}),
+    ...(polishPrompt ? { polishPrompt } : {}),
     voiceActivityDetection: value.voiceActivityDetection !== false,
     longformChunking: value.longformChunking !== false,
     ...(backend.type === "transcribe-cpp"
@@ -302,6 +313,8 @@ type ModelSettingsOptions = {
   polishEnabled?: boolean;
   /** Preserved across model re-selection; absent means the agent's current model. */
   polishModel?: PolishModelRef;
+  /** Preserved across model re-selection; absent means the built-in prompt. */
+  polishPrompt?: string;
   voiceActivityDetection?: boolean;
   longformChunking?: boolean;
 };
@@ -334,6 +347,7 @@ export function settingsForModel(
     microphone: { ...(options.microphone ?? DEFAULT_MICROPHONE) },
     polishEnabled: options.polishEnabled ?? false,
     ...(options.polishModel ? { polishModel: options.polishModel } : {}),
+    ...(options.polishPrompt ? { polishPrompt: options.polishPrompt } : {}),
     voiceActivityDetection: options.voiceActivityDetection ?? true,
     longformChunking: options.longformChunking ?? true,
     model: { source: "catalog", id: modelId, path: modelPath },
@@ -362,6 +376,7 @@ export function settingsRemoteOnly(options: RemoteSettingsOptions): TranscribeSe
     microphone: { ...(options.microphone ?? DEFAULT_MICROPHONE) },
     polishEnabled: options.polishEnabled ?? false,
     ...(options.polishModel ? { polishModel: options.polishModel } : {}),
+    ...(options.polishPrompt ? { polishPrompt: options.polishPrompt } : {}),
     voiceActivityDetection: options.voiceActivityDetection ?? true,
     longformChunking: options.longformChunking ?? true,
   };

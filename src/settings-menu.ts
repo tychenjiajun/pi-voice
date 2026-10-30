@@ -32,6 +32,7 @@ import {
 } from "./settings.js";
 import { displayShortcut } from "./shortcut-core.js";
 import { createShortcutPicker } from "./shortcuts.js";
+import { POLISH_SYSTEM_PROMPT } from "./polish.js";
 import {
   padToWidth,
   SingleSelectPicker,
@@ -51,6 +52,7 @@ export type SettingsAction =
   | "transcription-language"
   | "chinese-output"
   | "post-processing"
+  | "post-processing-prompt"
   | "microphone"
   | "shortcut";
 
@@ -97,6 +99,10 @@ function backendSummary(backend: BackendSettings): string {
 function polishSummary(polishEnabled: boolean | undefined, model: PolishModelRef | undefined): string {
   if (!polishEnabled) return "Off";
   return model ? `${model.provider}/${model.id}` : "Pi's current model";
+}
+
+function polishPromptSummary(prompt: string | undefined): string {
+  return prompt ? `Custom (${prompt.length} chars)` : "Built-in default";
 }
 
 let detectorDownload: Promise<void> | undefined;
@@ -161,6 +167,13 @@ export function settingsHomeChoices(
       summary: polishSummary(configured.polishEnabled, configured.polishModel),
       description:
         "Refine transcripts with Pi's current model after ASR, like context compaction",
+    },
+    {
+      value: "post-processing-prompt",
+      label: "Post-processing prompt",
+      summary: polishPromptSummary(configured.polishPrompt),
+      description:
+        "Instructions the post-processing model follows; edit or reset the built-in prompt",
     },
   );
 
@@ -344,6 +357,7 @@ async function editBackend(
       backend: { type: "transcribe-cpp" },
       polishEnabled: configured.polishEnabled,
       polishModel: configured.polishModel,
+      polishPrompt: configured.polishPrompt,
       postActivation: "stay",
     });
     if (!updated) {
@@ -499,6 +513,91 @@ async function editPostProcessing(
   );
 }
 
+export type PolishPromptSource = "default" | "custom";
+
+/** A custom prompt replaces the whole system prompt, so keep it to a sane size. */
+export const MAX_POLISH_PROMPT_LENGTH = 20_000;
+
+/** Ask whether post-processing runs the built-in prompt or a custom one. */
+export async function choosePolishPromptSource(
+  ctx: ExtensionContext,
+  current: string | undefined,
+): Promise<PolishPromptSource | undefined> {
+  const choices: SingleSelectChoice<PolishPromptSource>[] = [
+    {
+      value: "default",
+      label: "Built-in default",
+      description:
+        "Strip fillers and false starts, fix punctuation and casing; keeps the language and technical terms exactly",
+    },
+    {
+      value: "custom",
+      label: "Custom prompt",
+      description:
+        "Write your own instructions in a multi-line editor, starting from the built-in prompt",
+    },
+  ];
+  return ctx.ui.custom<PolishPromptSource | undefined>((tui, theme, keybindings, done) =>
+    new SingleSelectPicker(
+      tui,
+      theme,
+      keybindings,
+      choices,
+      current ? "custom" : "default",
+      { title: "Post-processing prompt", cancelLabel: "back" },
+      done,
+    ),
+  );
+}
+
+/**
+ * Post-processing prompt flow: pick the built-in prompt or edit a custom one.
+ * Clearing the custom text resets to the built-in prompt, so the editor doubles
+ * as a way to read and restore the default.
+ */
+export async function editPostProcessingPrompt(
+  ctx: ExtensionContext,
+  configured: TranscribeSettings,
+): Promise<boolean> {
+  const source = await choosePolishPromptSource(ctx, configured.polishPrompt);
+  if (!source) return false;
+
+  const resetToDefault = (message: string): Promise<boolean> =>
+    saveUpdatedSettings(ctx, configured, { ...configured, polishPrompt: undefined }, message);
+
+  if (source === "default") {
+    if (!configured.polishPrompt) return false;
+    return resetToDefault("Post-processing uses the built-in prompt");
+  }
+
+  // Prefilled so the built-in wording can be adjusted instead of retyped.
+  const edited = await ctx.ui.editor(
+    "Post-processing prompt (clear it to restore the built-in default)",
+    configured.polishPrompt ?? POLISH_SYSTEM_PROMPT,
+  );
+  if (edited === undefined) return false;
+
+  const prompt = edited.trim();
+  if (prompt.length > MAX_POLISH_PROMPT_LENGTH) {
+    ctx.ui.notify(
+      `Post-processing prompt is too long (${prompt.length} characters; the limit is ${MAX_POLISH_PROMPT_LENGTH})`,
+      "error",
+    );
+    return false;
+  }
+  if (!prompt) {
+    if (!configured.polishPrompt) return false;
+    return resetToDefault("Post-processing prompt reset to the built-in default");
+  }
+  if (prompt === configured.polishPrompt) return false;
+  return saveUpdatedSettings(
+    ctx,
+    configured,
+    { ...configured, polishPrompt: prompt },
+    `Post-processing prompt saved (${prompt.length} characters)`,
+  );
+}
+
 export async function openMacOSMicrophoneSettings(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
@@ -576,6 +675,7 @@ export async function showSettingsMenu(
         backend: configured.backend,
         polishEnabled: configured.polishEnabled,
         polishModel: configured.polishModel,
+        polishPrompt: configured.polishPrompt,
         voiceActivityDetection: configured.voiceActivityDetection,
         longformChunking: configured.longformChunking,
         postActivation: "stay",
@@ -598,6 +698,11 @@ export async function showSettingsMenu(
 
     if (action === "post-processing") {
       await editPostProcessing(ctx, configured);
+      continue;
+    }
+
+    if (action === "post-processing-prompt") {
+      await editPostProcessingPrompt(ctx, configured);
       continue;
     }
 

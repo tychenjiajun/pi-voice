@@ -1,11 +1,22 @@
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   initTheme,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { choosePolishModel, settingsHomeChoices } from "../src/settings-menu.js";
 import {
+  choosePolishModel,
+  choosePolishPromptSource,
+  editPostProcessingPrompt,
+  MAX_POLISH_PROMPT_LENGTH,
+  settingsHomeChoices,
+} from "../src/settings-menu.js";
+import { POLISH_SYSTEM_PROMPT } from "../src/polish.js";
+import {
+  readSettings,
   settingsForModel,
   settingsRemoteOnly,
   type PolishModelRef,
@@ -236,4 +247,207 @@ test("a thousand-model registry stays searchable and fits the pane", () => {
   // 1200 registry models + the whisper override + "Pi's current model".
   assert.match(lines.join("\n"), /1\/1202 matching choices/);
   assert.ok(lines.length <= 22, `${lines.length} rows at 80x24`);
+});
+
+function postProcessingPromptRow(settings: TranscribeSettings) {
+  return settingsHomeChoices(settings, "granted").find(
+    (choice) => choice.value === "post-processing-prompt",
+  );
+}
+
+test("the post-processing prompt row reports the built-in default and custom prompts", () => {
+  const base = configured(ENGLISH_ONLY, ["en"]);
+  assert.equal(postProcessingPromptRow(base)?.summary, "Built-in default");
+  const custom = { ...base, polishPrompt: "Only fix punctuation." };
+  assert.equal(postProcessingPromptRow(custom)?.summary, "Custom (21 chars)");
+});
+
+type PickerContext = {
+  picker: SingleSelectPicker<"default" | "custom">;
+  press: (key: string) => void;
+  result: Promise<"default" | "custom" | undefined>;
+};
+
+/** Drive choosePolishPromptSource like a user with arrow keys and Enter. */
+function openPolishPromptSourcePicker(current?: string): PickerContext {
+  let picker: SingleSelectPicker<"default" | "custom"> | undefined;
+  let finish: ((value: "default" | "custom" | undefined) => void) | undefined;
+  const ctx = {
+    ui: {
+      custom: (
+        factory: (
+          tui: unknown,
+          theme: unknown,
+          kb: unknown,
+          done: (value: "default" | "custom" | undefined) => void,
+        ) => unknown,
+      ) => {
+        const pending = new Promise<"default" | "custom" | undefined>((resolve) => {
+          finish = resolve;
+        });
+        picker = factory(
+          testTui(24),
+          testTheme(),
+          keybindings(),
+          (value) => finish?.(value),
+        ) as SingleSelectPicker<"default" | "custom">;
+        return pending;
+      },
+    },
+  } as unknown as ExtensionContext;
+  const result = choosePolishPromptSource(ctx, current);
+  if (!picker) throw new Error("prompt source picker did not open");
+  const open = picker;
+  return {
+    picker: open,
+    press: (key: string) => open.handleInput(key),
+    result,
+  };
+}
+
+function selectedValue(picker: SingleSelectPicker<"default" | "custom">): string {
+  const state = picker as unknown as {
+    filtered: Array<{ value: string }>;
+    selectedIndex: number;
+  };
+  return state.filtered[state.selectedIndex]!.value;
+}
+
+test("the prompt source picker highlights the prompt in use", () => {
+  assert.equal(selectedValue(openPolishPromptSourcePicker().picker), "default");
+  assert.equal(
+    selectedValue(openPolishPromptSourcePicker("Only fix punctuation.").picker),
+    "custom",
+  );
+});
+
+test("the prompt source picker returns the chosen source and backs out on escape", async () => {
+  const builtIn = openPolishPromptSourcePicker();
+  builtIn.press("\r");
+  assert.equal(await builtIn.result, "default");
+
+  const backedOut = openPolishPromptSourcePicker("Custom instructions");
+  backedOut.press("\x1b");
+  assert.equal(await backedOut.result, undefined);
+});
+
+/** Settings directory plus the UI stubs editPostProcessingPrompt touches. */
+function promptFlow(t: TestContext, options: {
+  source: "default" | "custom" | undefined;
+  editor?: string;
+}) {
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const directory = mkdtempSync(join(tmpdir(), "pi-voice-polish-prompt-test-"));
+  process.env.PI_CODING_AGENT_DIR = directory;
+  t.after(() => {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  const notifications: Array<{ message: string; type?: string }> = [];
+  const editorTitles: string[] = [];
+  const editorPrefills: Array<string | undefined> = [];
+  const ctx = {
+    ui: {
+      custom: async () => options.source,
+      editor: async (title: string, prefill?: string) => {
+        editorTitles.push(title);
+        editorPrefills.push(prefill);
+        return options.editor;
+      },
+      notify: (message: string, type?: string) => notifications.push({ message, type }),
+    },
+  } as unknown as ExtensionContext;
+  return { ctx, notifications, editorTitles, editorPrefills };
+}
+
+test("saving a custom prompt writes it to settings", async (t) => {
+  const { ctx, notifications, editorTitles, editorPrefills } = promptFlow(t, {
+    source: "custom",
+    editor: "\n  Only fix punctuation. \n",
+  });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+  });
+  assert.equal(await editPostProcessingPrompt(ctx, configured), true);
+  assert.deepEqual(editorTitles, [
+    "Post-processing prompt (clear it to restore the built-in default)",
+  ]);
+  // Prefilled so the built-in wording can be edited instead of retyped.
+  assert.deepEqual(editorPrefills, [POLISH_SYSTEM_PROMPT]);
+  assert.equal(configured.polishPrompt, "Only fix punctuation.");
+  assert.equal((await readSettings()).settings?.polishPrompt, "Only fix punctuation.");
+  assert.match(notifications.at(-1)?.message ?? "", /prompt saved/);
+});
+
+test("a prefilled prompt is edited, not replaced by the built-in wording", async (t) => {
+  const { ctx, editorPrefills } = promptFlow(t, {
+    source: "custom",
+    editor: "Custom instructions",
+  });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishPrompt: "Only fix punctuation.",
+  });
+  assert.equal(await editPostProcessingPrompt(ctx, configured), true);
+  assert.deepEqual(editorPrefills, ["Only fix punctuation."]);
+});
+
+test("clearing the custom prompt restores the built-in prompt", async (t) => {
+  const { ctx, notifications } = promptFlow(t, { source: "custom", editor: "   \n" });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishPrompt: "Only fix punctuation.",
+  });
+  assert.equal(await editPostProcessingPrompt(ctx, configured), true);
+  assert.equal(configured.polishPrompt, undefined);
+  assert.equal((await readSettings()).settings?.polishPrompt, undefined);
+  assert.match(notifications.at(-1)?.message ?? "", /reset to the built-in default/);
+});
+
+test("choosing the built-in prompt drops a stored custom one", async (t) => {
+  const { ctx } = promptFlow(t, { source: "default" });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishPrompt: "Only fix punctuation.",
+  });
+  assert.equal(await editPostProcessingPrompt(ctx, configured), true);
+  assert.equal((await readSettings()).settings?.polishPrompt, undefined);
+});
+
+test("an unchanged or cancelled prompt edit saves nothing", async (t) => {
+  const unchanged = promptFlow(t, {
+    source: "custom",
+    editor: "Only fix punctuation.",
+  });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishPrompt: "Only fix punctuation.",
+  });
+  assert.equal(await editPostProcessingPrompt(unchanged.ctx, configured), false);
+
+  const cancelled = promptFlow(t, { source: "custom", editor: undefined });
+  assert.equal(await editPostProcessingPrompt(cancelled.ctx, configured), false);
+
+  const alreadyDefault = promptFlow(t, { source: "default" });
+  const plain = settingsForModel(ENGLISH_ONLY, "/tmp/model", { shortcut: "ctrl+alt+z" });
+  assert.equal(await editPostProcessingPrompt(alreadyDefault.ctx, plain), false);
+
+  const backedOut = promptFlow(t, { source: undefined });
+  assert.equal(await editPostProcessingPrompt(backedOut.ctx, configured), false);
+});
+
+test("an over-long prompt is rejected instead of stored", async (t) => {
+  const { ctx, notifications } = promptFlow(t, {
+    source: "custom",
+    editor: "x".repeat(MAX_POLISH_PROMPT_LENGTH + 1),
+  });
+  const configured = settingsForModel(ENGLISH_ONLY, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+  });
+  assert.equal(await editPostProcessingPrompt(ctx, configured), false);
+  assert.equal(configured.polishPrompt, undefined);
+  assert.match(notifications.at(-1)?.message ?? "", /too long/);
+  assert.equal(notifications.at(-1)?.type, "error");
 });

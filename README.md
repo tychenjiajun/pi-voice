@@ -35,7 +35,7 @@ The extension registers:
 - a configurable terminal shortcut (`Ctrl+Space` by default) to start and stop recording;
 - `/voice`, which does the same as the shortcut. While recording, `Space` also stops and transcribes, and `Escape` discards;
 - a `transcribe_file` tool that the agent can use to transcribe local audio or video files;
-- `/voice-settings` for preferred languages, model, transcription backend, transcription language, post-processing, microphone, and shortcut settings.
+- `/voice-settings` for preferred languages, model, transcription backend, transcription language, post-processing (model and prompt), microphone, and shortcut settings.
 
 `/transcribe` remains available as a compatibility alias for `/voice-settings`.
 
@@ -74,6 +74,8 @@ Set it up in `/voice-settings` → **Post-processing** → **On**. You then choo
 - **Pi's current model** (default) — whichever model the agent is using, exactly like compaction;
 - **a different model** — any model from Pi's registry, using that provider's configured authentication. The picker is searchable: type a keyword (a model name or part of `provider/id`) to filter the list, `Enter` selects the highlighted match, and `Esc` clears the search.
 
+**Post-processing prompt** (the row below it) controls the instructions the model follows. **Built-in default** strips fillers and false starts, fixes punctuation and casing, and keeps the language, names, numbers, and technical terms exactly. **Custom prompt** opens a multi-line editor prefilled with the built-in wording, so you can adjust it instead of retyping it — for example to keep the transcript verbatim and only add punctuation, translate, or reformat as Markdown. Clearing the editor, or picking **Built-in default**, restores the built-in prompt; the row summary shows `Built-in default` or `Custom (n chars)`. The custom prompt replaces the built-in system prompt entirely, so keep the "output only the refined text" instruction if you want it.
+
 Pi Voice makes a small nested request through Pi's model registry, so it automatically reuses Pi's model definitions and API keys (or OAuth). No base URL, key, or timeout is stored in Pi Voice settings.
 
 Behavior:
@@ -82,6 +84,7 @@ Behavior:
 - **Reasoning-safe.** A provider's thinking is ignored (Pi reports it as `thinking` blocks), and inline reasoning tags a model may embed in its text are stripped. If only reasoning comes back, the raw transcript is kept.
 - **Discrete, not streaming.** Refinement happens after the full transcript is produced, so there is no live preview of the polished text.
 - **Applies to all transcription.** Microphone dictation and the `transcribe_file` tool both go through the same post-processing step when it is enabled.
+- **Custom prompt is optional and stored in settings.** `polishPrompt` in `settings.json` holds the custom instructions; absent means the built-in prompt. The prompt is sent as the system prompt of the refinement request, and an empty or whitespace-only value falls back to the built-in one.
 
 ## Upgrading from pi-transcribe
 

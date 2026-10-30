@@ -13,6 +13,9 @@ import type { PolishModelRef } from "./settings.js";
  * empty response — the original transcript is returned unchanged. Provider
  * reasoning is ignored (Pi reports it as `thinking` blocks), and inline
  * reasoning tags are stripped from the refined text.
+ *
+ * The instructions can be replaced from settings (`polishPrompt`); the built-in
+ * prompt below remains the default and the starting point for editing.
  */
 
 export const POLISH_SYSTEM_PROMPT = `# Role
@@ -73,19 +76,31 @@ type PolishModelRegistry = {
   ): Promise<PolishAssistantMessage>;
 };
 
+export type PolishRequest = {
+  /** When false the raw transcript is returned untouched. */
+  enabled: boolean;
+  /** Explicit model override; absent uses the agent's current model. */
+  modelRef?: PolishModelRef;
+  /** Replaces the built-in prompt; absent or blank uses POLISH_SYSTEM_PROMPT. */
+  prompt?: string;
+  signal?: AbortSignal;
+};
+
 export async function polishTranscript(
   ctx: ExtensionContext,
   text: string,
-  enabled: boolean,
-  modelRef?: PolishModelRef,
-  signal?: AbortSignal,
+  request: PolishRequest,
 ): Promise<string> {
+  const { enabled, modelRef, signal } = request;
   if (!enabled) return text;
   const trimmed = text.trim();
   if (!trimmed) return text;
 
   const requestSignal = signal ?? ctx.signal;
   if (requestSignal?.aborted) return text;
+
+  const customPrompt = request.prompt?.trim();
+  const systemPrompt = customPrompt || POLISH_SYSTEM_PROMPT;
 
   // An explicit override is resolved against Pi's own model definitions, so it
   // shares the same catalog and provider authentication as the agent. Falls
@@ -113,14 +128,15 @@ export async function polishTranscript(
   writeLog(
     "info",
     "polish",
-    `refining ${trimmed.length} chars with ${model.provider ?? "?"}/${model.id ?? "?"}`,
+    `refining ${trimmed.length} chars with ${model.provider ?? "?"}/${model.id ?? "?"}` +
+      `${customPrompt ? " (custom prompt)" : ""}`,
   );
 
   try {
     const response = await registry.complete(
       model,
       {
-        systemPrompt: POLISH_SYSTEM_PROMPT,
+        systemPrompt,
         messages: [
           {
             role: "user",

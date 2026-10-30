@@ -155,6 +155,7 @@ export function createPiVoiceRuntime(
       backend: previous.backend,
       polishEnabled: previous.polishEnabled,
       polishModel: previous.polishModel,
+      polishPrompt: previous.polishPrompt,
       voiceActivityDetection: previous.voiceActivityDetection,
       longformChunking: previous.longformChunking,
       postActivation: "advance",
@@ -310,7 +311,11 @@ export function createPiVoiceRuntime(
         await reportDictationError(ctx, active.dictation);
       } else if (result.text) {
         const text = active.settings.polishEnabled
-          ? await polishTranscript(ctx, result.text, true, active.settings.polishModel)
+          ? await polishTranscript(ctx, result.text, {
+              enabled: true,
+              modelRef: active.settings.polishModel,
+              prompt: active.settings.polishPrompt,
+            })
           : result.text;
         ctx.ui.pasteToEditor(text);
         showTranscribeStatus(

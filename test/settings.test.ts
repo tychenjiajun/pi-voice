@@ -70,6 +70,27 @@ test("local settings without a model are rejected", async (t) => {
   assert.match(warning ?? "", /configuration is required/);
 });
 
+test("a custom post-processing prompt survives model selection", () => {
+  const prompt = "Only fix punctuation; keep the speaker's wording.";
+  const local = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    polishPrompt: prompt,
+  });
+  assert.equal(local.polishPrompt, prompt);
+
+  const remote = settingsRemoteOnly({
+    shortcut: "ctrl+alt+z",
+    backend: REMOTE_BACKEND,
+    polishPrompt: prompt,
+  });
+  assert.equal(remote.polishPrompt, prompt);
+
+  const plain = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+  });
+  assert.equal("polishPrompt" in plain, false, "absent means the built-in prompt");
+});
+
 test("selecting a local model drops any remote configuration", () => {
   const settings = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", {
     shortcut: "ctrl+alt+z",

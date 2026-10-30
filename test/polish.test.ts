@@ -4,7 +4,11 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { polishTranscript, stripThinkingTags } from "../src/polish.js";
+import {
+  POLISH_SYSTEM_PROMPT,
+  polishTranscript,
+  stripThinkingTags,
+} from "../src/polish.js";
 import {
   readSettings,
   settingsForModel,
@@ -37,14 +41,14 @@ test("disabled post-processing returns the raw transcript unchanged", async () =
     },
   });
   const raw = "raw,  unpolished—text";
-  assert.equal(await polishTranscript(ctx, raw, false), raw);
+  assert.equal(await polishTranscript(ctx, raw, { enabled: false }), raw);
   assert.equal(called, false);
 });
 
 test("empty or whitespace-only transcripts skip post-processing", async () => {
   const ctx = fakeContext();
-  assert.equal(await polishTranscript(ctx, "", true), "");
-  assert.equal(await polishTranscript(ctx, "   \n ", true), "   \n ");
+  assert.equal(await polishTranscript(ctx, "", { enabled: true }), "");
+  assert.equal(await polishTranscript(ctx, "   \n ", { enabled: true }), "   \n ");
 });
 
 test("an already-aborted signal keeps the raw transcript", async () => {
@@ -52,7 +56,7 @@ test("an already-aborted signal keeps the raw transcript", async () => {
   controller.abort();
   const ctx = fakeContext({ signal: controller.signal });
   const raw = "do not call the model when the operation is aborted";
-  assert.equal(await polishTranscript(ctx, raw, true), raw);
+  assert.equal(await polishTranscript(ctx, raw, { enabled: true }), raw);
 });
 
 test("no active Pi model keeps the raw transcript", async () => {
@@ -67,7 +71,7 @@ test("no active Pi model keeps the raw transcript", async () => {
     },
   });
   const raw = "um like please polish this";
-  assert.equal(await polishTranscript(ctx, raw, true), raw);
+  assert.equal(await polishTranscript(ctx, raw, { enabled: true }), raw);
   assert.equal(called, false);
 });
 
@@ -80,7 +84,7 @@ test("a successful model response replaces the transcript", async () => {
       }),
     },
   });
-  assert.equal(await polishTranscript(ctx, "um like please polish this", true), "please polish this");
+  assert.equal(await polishTranscript(ctx, "um like please polish this", { enabled: true }), "please polish this");
 });
 
 test("a configured override model is resolved through the registry", async () => {
@@ -97,7 +101,7 @@ test("a configured override model is resolved through the registry", async () =>
       },
     },
   });
-  assert.equal(await polishTranscript(ctx, "raw", true, override), "cleaned");
+  assert.equal(await polishTranscript(ctx, "raw", { enabled: true, modelRef: override }), "cleaned");
   assert.deepEqual(used, [override]);
 });
 
@@ -115,7 +119,7 @@ test("an unavailable override falls back to the agent's current model", async ()
     },
   });
   assert.equal(
-    await polishTranscript(ctx, "raw", true, { provider: "google", id: "missing" }),
+    await polishTranscript(ctx, "raw", { enabled: true, modelRef: { provider: "google", id: "missing" } }),
     "cleaned",
   );
   assert.deepEqual(used, [current]);
@@ -130,14 +134,52 @@ test("model failures and empty responses keep the raw transcript", async () => {
     },
   });
   const raw = "keep me";
-  assert.equal(await polishTranscript(failing, raw, true), raw);
+  assert.equal(await polishTranscript(failing, raw, { enabled: true }), raw);
 
   const empty = fakeContext({
     modelRegistry: {
       complete: async () => ({ stopReason: "stop", content: [] }),
     },
   });
-  assert.equal(await polishTranscript(empty, raw, true), raw);
+  assert.equal(await polishTranscript(empty, raw, { enabled: true }), raw);
+});
+
+/** Capture the system prompt sent to the model for one refinement. */
+async function capturedSystemPrompt(request: {
+  prompt?: string;
+}): Promise<string | undefined> {
+  const prompts: Array<string | undefined> = [];
+  const ctx = fakeContext({
+    modelRegistry: {
+      complete: async (
+        _model: unknown,
+        context: { systemPrompt?: string },
+      ) => {
+        prompts.push(context.systemPrompt);
+        return { stopReason: "stop", content: [{ type: "text", text: "cleaned" }] };
+      },
+    },
+  });
+  await polishTranscript(ctx, "um cleaned", { enabled: true, ...request });
+  return prompts[0];
+}
+
+test("a custom prompt replaces the built-in system prompt", async () => {
+  const custom = "# Role\n\nEdit for a technical audience.";
+  assert.equal(await capturedSystemPrompt({ prompt: custom }), custom);
+});
+
+test("an absent or blank prompt uses the built-in system prompt", async () => {
+  assert.equal(await capturedSystemPrompt({}), POLISH_SYSTEM_PROMPT);
+  assert.equal(await capturedSystemPrompt({ prompt: "" }), POLISH_SYSTEM_PROMPT);
+  assert.equal(await capturedSystemPrompt({ prompt: "  \n\t " }), POLISH_SYSTEM_PROMPT);
+});
+
+test("a custom prompt is trimmed before it is sent", async () => {
+  assert.equal(
+    await capturedSystemPrompt({ prompt: "\n  custom instructions  \n" }),
+    "custom instructions",
+  );
 });
 
 test("stripThinkingTags removes inline reasoning blocks", () => {
@@ -164,7 +206,7 @@ test("thinking blocks reported by Pi are ignored and inline tags are stripped", 
       }),
     },
   });
-  assert.equal(await polishTranscript(ctx, "um cleaned sentence", true), "cleaned sentence");
+  assert.equal(await polishTranscript(ctx, "um cleaned sentence", { enabled: true }), "cleaned sentence");
 });
 
 test("a response that is only thinking keeps the raw transcript", async () => {
@@ -177,7 +219,7 @@ test("a response that is only thinking keeps the raw transcript", async () => {
     },
   });
   const raw = "keep the raw transcript";
-  assert.equal(await polishTranscript(ctx, raw, true), raw);
+  assert.equal(await polishTranscript(ctx, raw, { enabled: true }), raw);
 });
 
 test("settings round-trip preserves post-processing and defaults it off", async (t) => {
@@ -201,6 +243,19 @@ test("settings round-trip preserves post-processing and defaults it off", async 
   await writeSettings(configured);
   assert.deepEqual((await readSettings()).settings, configured);
 
+  const withPrompt: TranscribeSettings = {
+    ...configured,
+    polishPrompt: "Only fix punctuation.\nKeep the speaker's own words.",
+  };
+  await writeSettings(withPrompt);
+  assert.deepEqual((await readSettings()).settings, withPrompt);
+
+  // A blank prompt is not stored: absent means the built-in prompt.
+  await writeSettings({ ...withPrompt, polishPrompt: "   " });
+  assert.equal((await readSettings()).settings?.polishPrompt, undefined);
+  await writeSettings({ ...withPrompt, polishPrompt: 42 as unknown as string });
+  assert.equal((await readSettings()).settings?.polishPrompt, undefined);
+
   const legacy: TranscribeSettings = { ...configured };
   delete legacy.polishEnabled;
   delete legacy.polishModel;
@@ -208,4 +263,5 @@ test("settings round-trip preserves post-processing and defaults it off", async 
   const reverted = await readSettings();
   assert.equal(reverted.settings?.polishEnabled, false);
   assert.equal(reverted.settings?.polishModel, undefined);
+  assert.equal(reverted.settings?.polishPrompt, undefined);
 });

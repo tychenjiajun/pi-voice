@@ -162,13 +162,12 @@ export function registerFileTranscriptionTool(
               operationSignal,
             );
             const transcript = configured.polishEnabled
-              ? await polishTranscript(
-                  ctx,
-                  rawTranscript,
-                  true,
-                  configured.polishModel,
-                  operationSignal,
-                )
+              ? await polishTranscript(ctx, rawTranscript, {
+                  enabled: true,
+                  modelRef: configured.polishModel,
+                  prompt: configured.polishPrompt,
+                  signal: operationSignal,
+                })
               : rawTranscript;
             const details: FileTranscriptionDetails = {
               inputPath,

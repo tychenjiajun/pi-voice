@@ -69,6 +69,8 @@ type ModelSelectionOptions = {
   polishEnabled?: boolean;
   /** Preserved across the model re-pick; absent means the agent's current model. */
   polishModel?: PolishModelRef;
+  /** Preserved across the model re-pick; absent means the built-in prompt. */
+  polishPrompt?: string;
   voiceActivityDetection?: boolean;
   longformChunking?: boolean;
   /** Persists language changes made before this flow activates a model. */
@@ -98,6 +100,7 @@ export async function runModelSelection(
       backend: configured?.backend ?? options.backend,
       polishEnabled: configured?.polishEnabled ?? options.polishEnabled ?? false,
       polishModel: configured?.polishModel ?? options.polishModel,
+      polishPrompt: configured?.polishPrompt ?? options.polishPrompt,
       voiceActivityDetection: configured?.voiceActivityDetection ?? options.voiceActivityDetection,
       longformChunking: configured?.longformChunking ?? options.longformChunking,
     }),
@@ -232,6 +235,7 @@ export async function changeOnboardingModel(
       backend: current.backend,
       polishEnabled: current.polishEnabled,
       polishModel: current.polishModel,
+      polishPrompt: current.polishPrompt,
       voiceActivityDetection: current.voiceActivityDetection,
       longformChunking: current.longformChunking,
     }),
