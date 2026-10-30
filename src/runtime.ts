@@ -12,6 +12,7 @@ import { logStep, watchEventLoop } from "./log.js";
 import { DictationController } from "./dictation-controller.js";
 import { VoiceKeys } from "./keybindings.js";
 import { polishTranscript } from "./polish.js";
+import { requestReadyAfterReload, takeReadyRequest } from "./ready-handoff.js";
 import type { TranscribeSettings } from "./settings.js";
 import { displayShortcut } from "./shortcut-core.js";
 import { TranscriptionService } from "./transcription-service.js";
@@ -36,6 +37,8 @@ export type PiVoiceRuntime = {
   toggleCapture(ctx: ExtensionContext): Promise<void>;
   showSettings(ctx: ExtensionCommandContext): Promise<void>;
   replayOnboarding(ctx: ExtensionCommandContext): Promise<void>;
+  /** Shows Ready for setup that a reload interrupted. */
+  showReadyAfterReload(ctx: ExtensionContext): Promise<void>;
   shutdown(ctx: ExtensionContext): Promise<void>;
 };
 
@@ -93,13 +96,13 @@ export function createPiVoiceRuntime(
     settingsReadWarning = undefined;
   }
 
-  async function notifyReady(ctx: ExtensionContext, configured: TranscribeSettings): Promise<void> {
+  async function notifyReady(ctx: ExtensionContext, shortcut: string): Promise<void> {
     // Pi binds shortcuts at extension load. The command path reloads on its
     // own; the shortcut path cannot, so say what it takes to use a new one.
-    const reloadNeeded = configured.shortcut !== registeredShortcut;
+    const reloadNeeded = shortcut !== registeredShortcut;
     const talk = reloadNeeded
-      ? `run /reload, then ${displayShortcut(configured.shortcut)} to talk`
-      : `${displayShortcut(configured.shortcut)} to talk`;
+      ? `run /reload, then ${displayShortcut(shortcut)} to talk`
+      : `${displayShortcut(shortcut)} to talk`;
     const command = "/voice-settings";
     const commandDescription = "to change settings and download new models";
     const summary = `${command} ${commandDescription}`;
@@ -160,9 +163,10 @@ export function createPiVoiceRuntime(
     return configured;
   }
 
+  // `setUp`: setup ran and finished; the caller shows Ready since only it knows if a reload follows.
   async function ensureSettings(
     ctx: ExtensionContext,
-  ): Promise<{ configured?: TranscribeSettings; completedFirstRun: boolean }> {
+  ): Promise<{ configured?: TranscribeSettings; setUp: boolean; completedFirstRun: boolean }> {
     await loadSettingsOnce();
     if (settingsReadWarning && !settingsWarningShown) {
       settingsWarningShown = true;
@@ -170,7 +174,7 @@ export function createPiVoiceRuntime(
     }
 
     if (settings && (!settings.model || existsSync(settings.model.path))) {
-      return { configured: settings, completedFirstRun: false };
+      return { configured: settings, setUp: false, completedFirstRun: false };
     }
 
     const previous = settings;
@@ -185,8 +189,11 @@ export function createPiVoiceRuntime(
     const configured = previous
       ? await configureModel(ctx, previous)
       : await configureFirstRun(ctx);
-    if (configured) await notifyReady(ctx, configured);
-    return { configured, completedFirstRun: previous === undefined && configured !== undefined };
+    return {
+      configured,
+      setUp: configured !== undefined,
+      completedFirstRun: previous === undefined && configured !== undefined,
+    };
   }
 
   async function requireConfiguredSettingsForTool(): Promise<TranscribeSettings> {
@@ -422,7 +429,8 @@ export function createPiVoiceRuntime(
       clearTranscribeWidget(ctx);
     }
 
-    const { configured, completedFirstRun } = await ensureSettings(ctx);
+    const { configured, setUp, completedFirstRun } = await ensureSettings(ctx);
+    if (configured && setUp) await notifyReady(ctx, configured.shortcut);
     if (configured && !completedFirstRun) await startRecording(ctx, configured);
     // The meter shares the widget slot and has replaced the spinner when
     // recording began; clear the spinner only when recording never started.
@@ -462,14 +470,16 @@ export function createPiVoiceRuntime(
     }
 
     let reload = false;
+    let readyShortcut: string | undefined;
     await runExclusive(ctx, async () => {
-      await loadSettingsOnce();
-      const { configured, completedFirstRun } = await ensureSettings(ctx);
+      const { configured, setUp } = await ensureSettings(ctx);
       if (!configured) return;
-      if (completedFirstRun) {
+      if (setUp) {
         // First-run setup ends on its Ready message rather than falling
         // straight through into the regular settings menu.
         reload = configured.shortcut !== registeredShortcut;
+        if (reload) readyShortcut = configured.shortcut;
+        else await notifyReady(ctx, configured.shortcut);
         return;
       }
       // A recovered missing model file also lands here: the user asked for
@@ -478,8 +488,19 @@ export function createPiVoiceRuntime(
       const { showSettingsMenu } = await import("./settings-menu.js");
       reload = await showSettingsMenu(pi, ctx, configured, registeredShortcut);
     });
-    if (reload) {
-      await ctx.reload();
+    if (reload) await reloadForShortcut(ctx, readyShortcut);
+  }
+
+  // Reload clears widgets, so Ready after setup is shown by the next instance.
+  async function reloadForShortcut(
+    ctx: ExtensionCommandContext,
+    readyShortcut: string | undefined,
+  ): Promise<void> {
+    if (readyShortcut) requestReadyAfterReload();
+    await ctx.reload();
+    // Unclaimed means Pi declined the reload (e.g. mid-response): show Ready with the /reload hint.
+    if (takeReadyRequest() && readyShortcut && !shuttingDown) {
+      await notifyReady(ctx, readyShortcut);
     }
   }
 
@@ -493,6 +514,7 @@ export function createPiVoiceRuntime(
       return;
     }
 
+    let readyShortcut: string | undefined;
     await runExclusive(ctx, async () => {
       await loadSettingsOnce();
       const { runOnboarding } = await import("./onboarding.js");
@@ -502,10 +524,15 @@ export function createPiVoiceRuntime(
       );
       if (!configured) return;
       rememberSettings(configured);
-      // End on the same Ready state as first-run setup. A replay should expose
-      // the complete user flow rather than a debug-only completion message.
-      await notifyReady(ctx, configured);
+      // End like first-run setup: Ready, reloading first if the shortcut changed.
+      if (configured.shortcut === registeredShortcut) await notifyReady(ctx, configured.shortcut);
+      else readyShortcut = configured.shortcut;
     });
+    if (readyShortcut) await reloadForShortcut(ctx, readyShortcut);
+  }
+
+  async function showReadyAfterReload(ctx: ExtensionContext): Promise<void> {
+    await notifyReady(ctx, registeredShortcut);
   }
 
   async function shutdown(ctx: ExtensionContext): Promise<void> {
@@ -536,6 +563,7 @@ export function createPiVoiceRuntime(
     toggleCapture,
     showSettings,
     replayOnboarding,
+    showReadyAfterReload,
     shutdown,
   };
 }

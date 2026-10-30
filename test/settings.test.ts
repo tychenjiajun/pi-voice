@@ -48,7 +48,7 @@ test("remote-only settings round-trip without a local model", async (t) => {
 test("a leftover local model is dropped when the backend is remote", async (t) => {
   isolatedSettings(t);
   const crafted = {
-    ...settingsForModel("parakeet-unified-en-0.6b", "/tmp/model"),
+    ...settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", { shortcut: "ctrl+alt+z" }),
     backend: REMOTE_BACKEND,
   };
   assert.ok(crafted.model);
@@ -62,7 +62,7 @@ test("a leftover local model is dropped when the backend is remote", async (t) =
 
 test("local settings without a model are rejected", async (t) => {
   isolatedSettings(t);
-  const { model: _model, ...base } = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model");
+  const { model: _model, ...base } = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", { shortcut: "ctrl+alt+z" });
   await writeSettings({ ...base, model: undefined });
 
   const { settings, warning } = await readSettings();
@@ -72,6 +72,7 @@ test("local settings without a model are rejected", async (t) => {
 
 test("selecting a local model drops any remote configuration", () => {
   const settings = settingsForModel("parakeet-unified-en-0.6b", "/tmp/model", {
+    shortcut: "ctrl+alt+z",
     backend: REMOTE_BACKEND,
   });
   assert.deepEqual(settings.backend, { type: "transcribe-cpp" });

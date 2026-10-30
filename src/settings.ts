@@ -6,7 +6,7 @@ import {
   type CatalogModel,
 } from "./catalog.js";
 import { autoLanguagePolicy } from "./language-detection-policy.js";
-import { DEFAULT_SHORTCUT, normalizeShortcut } from "./shortcut-core.js";
+import { normalizeShortcut } from "./shortcut-core.js";
 import { legacySettingsPath, settingsPath } from "./settings-path.js";
 
 const SETTINGS_VERSION = 1;
@@ -288,7 +288,7 @@ export async function writeSettings(settings: TranscribeSettings): Promise<void>
 }
 
 type ModelSettingsOptions = {
-  shortcut?: string;
+  shortcut: string;
   preferredLanguages?: readonly string[];
   transcriptionLanguage?: TranscriptionLanguage;
   chineseOutput?: ChineseOutput;
@@ -309,7 +309,7 @@ type ModelSettingsOptions = {
 export function settingsForModel(
   modelId: string,
   modelPath: string,
-  options: ModelSettingsOptions = {},
+  options: ModelSettingsOptions,
 ): TranscribeSettings {
   const model = getCatalogModel(modelId);
   if (!model) throw new Error(`Unknown catalog model: ${modelId}`);
@@ -323,7 +323,7 @@ export function settingsForModel(
       options.backend && options.backend.type === "transcribe-cpp"
         ? options.backend
         : { type: "transcribe-cpp" },
-    shortcut: options.shortcut ?? DEFAULT_SHORTCUT,
+    shortcut: options.shortcut,
     preferredLanguages,
     transcriptionLanguage: transcriptionLanguageForModel(
       options.transcriptionLanguage,
@@ -353,7 +353,7 @@ export function settingsRemoteOnly(options: RemoteSettingsOptions): TranscribeSe
   return {
     version: SETTINGS_VERSION,
     backend: options.backend,
-    shortcut: options.shortcut ?? DEFAULT_SHORTCUT,
+    shortcut: options.shortcut,
     preferredLanguages,
     // The endpoint detects the language itself; "auto" keeps the stored value
     // from triggering Chinese conversion against a language that is not there.

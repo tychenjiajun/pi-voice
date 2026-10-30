@@ -17,7 +17,10 @@ import { keybindings, testTheme, testTui } from "./ui-helpers.js";
 initTheme("dark");
 
 function configured(modelId: string, preferredLanguages: string[]): TranscribeSettings {
-  return settingsForModel(modelId, "/tmp/model", { preferredLanguages });
+  return settingsForModel(modelId, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
+    preferredLanguages,
+  });
 }
 
 function rowValues(settings: TranscribeSettings): string[] {
@@ -50,6 +53,7 @@ test("remote-only settings hide the local model rows and keep Chinese output rea
   // model-derived transcription language row applies. The endpoint can always
   // produce Chinese, so the script preference must never be gated away.
   const settings = settingsRemoteOnly({
+    shortcut: "ctrl+alt+z",
     preferredLanguages: ["en"],
     backend: {
       type: "openai-asr",
@@ -76,6 +80,7 @@ test("local settings show the model and transcription language rows", () => {
 test("picking a local model always yields local-only settings", () => {
   // The backends are exclusive: a selected model drops any remote config.
   const settings = settingsForModel(DETECTING_MULTILINGUAL, "/tmp/model", {
+    shortcut: "ctrl+alt+z",
     preferredLanguages: ["en"],
     backend: {
       type: "openai-asr",

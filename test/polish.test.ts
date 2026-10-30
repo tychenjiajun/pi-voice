@@ -190,7 +190,7 @@ test("settings round-trip preserves post-processing and defaults it off", async 
     await rm(directory, { recursive: true, force: true });
   });
 
-  const base = settingsForModel("parakeet-unified-en-0.6b", "/tmp/test-model");
+  const base = settingsForModel("parakeet-unified-en-0.6b", "/tmp/test-model", { shortcut: "ctrl+alt+z" });
   assert.equal(base.polishEnabled, false);
 
   const configured: TranscribeSettings = {
