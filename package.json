@@ -67,15 +67,15 @@
     "@earendil-works/pi-coding-agent": "1.5.0",
     "@earendil-works/pi-tui": "^1.5.0",
     "@huggingface/gguf": "^0.4.6",
-    "@types/node": "22.20.1",
+    "@types/node": "26.6.6",
     "typebox": "^1.4.5",
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   },
   "dependencies": {
     "@handy-computer/recorder": "0.2.1",
-    "@huggingface/hub": "2.15.0",
+    "@huggingface/hub": "2.17.10",
     "openai": "^7.53.0",
     "opencc-js": "^1.4.2",
-    "transcribe-cpp": "0.4.0"
+    "transcribe-cpp": "0.4.1"
   }
 }
