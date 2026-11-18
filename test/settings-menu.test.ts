@@ -587,6 +587,8 @@ test("switching the backend to remote keeps a custom post-processing prompt", as
       assert.ok(pane instanceof SingleSelectPicker, pane.constructor.name);
       done("openai-asr");
     },
+    // Remote setup asks how the endpoint is called before the URL.
+    (_pane, done) => done("chat"),
     (_pane, done) => done("https://asr.example.com/v1"),
     (_pane, done) => done("whisper-test"),
     (_pane, done) => done("PI_VOICE_TEST_KEY"),
@@ -625,3 +627,98 @@ function pickModel(pane: Component, query: string): void {
   pane.handleInput("\x1b");
   pane.handleInput("\x1b");
 }
+
+function remoteConfigured(endpointStyle?: "chat" | "transcriptions"): TranscribeSettings {
+  return settingsRemoteOnly({
+    shortcut: "ctrl+alt+z",
+    preferredLanguages: ["en"],
+    backend: {
+      type: "openai-asr",
+      baseUrl: "https://asr.example.com/v1",
+      model: "whisper-test",
+      apiKeyEnv: "PI_VOICE_TEST_KEY",
+      ...(endpointStyle ? { endpointStyle } : {}),
+    },
+  });
+}
+
+function requestStyleRow(settings: TranscribeSettings) {
+  return settingsHomeChoices(settings, "granted").find(
+    (choice) => choice.value === "endpoint-style",
+  );
+}
+
+test("the ASR request style row appears only in remote mode", () => {
+  assert.equal(requestStyleRow(configured(ENGLISH_ONLY, ["en"])), undefined);
+  assert.equal(requestStyleRow(remoteConfigured())?.summary, "Chat completions");
+  assert.equal(
+    requestStyleRow(remoteConfigured("transcriptions"))?.summary,
+    "Transcriptions upload",
+  );
+});
+
+test("the request style row switches dialect without re-asking for the endpoint", async (t) => {
+  settingsMenuFlow(t);
+  const configuredSettings = remoteConfigured();
+  await writeSettings(configuredSettings);
+
+  const script = scriptedContext([
+    (pane) => pickRow(pane, "endpoint-style"),
+    (_pane, done) => done("transcriptions"),
+    // Back out of the settings home once the row has saved.
+    (pane) => pane.handleInput?.("\x1b"),
+  ]);
+  await showSettingsMenu({} as ExtensionAPI, script.ctx, configuredSettings, "ctrl+alt+z");
+  script.assertFinished();
+
+  assert.deepEqual((await readSettings()).settings?.backend, {
+    type: "openai-asr",
+    baseUrl: "https://asr.example.com/v1",
+    model: "whisper-test",
+    apiKeyEnv: "PI_VOICE_TEST_KEY",
+    endpointStyle: "transcriptions",
+  });
+  assert.deepEqual(
+    script.notifications.map((note) => note.message),
+    ["ASR request style: Transcriptions upload"],
+  );
+});
+
+test("switching back to chat completions clears the stored style", async (t) => {
+  settingsMenuFlow(t);
+  const configuredSettings = remoteConfigured("transcriptions");
+  await writeSettings(configuredSettings);
+
+  const script = scriptedContext([
+    (pane) => pickRow(pane, "endpoint-style"),
+    (_pane, done) => done("chat"),
+    (pane) => pane.handleInput?.("\x1b"),
+  ]);
+  await showSettingsMenu({} as ExtensionAPI, script.ctx, configuredSettings, "ctrl+alt+z");
+  script.assertFinished();
+
+  assert.deepEqual((await readSettings()).settings?.backend, {
+    type: "openai-asr",
+    baseUrl: "https://asr.example.com/v1",
+    model: "whisper-test",
+    apiKeyEnv: "PI_VOICE_TEST_KEY",
+  });
+});
+
+test("cancelling the request style picker saves nothing", async (t) => {
+  settingsMenuFlow(t);
+  const configuredSettings = remoteConfigured("transcriptions");
+  await writeSettings(configuredSettings);
+
+  const script = scriptedContext([
+    (pane) => pickRow(pane, "endpoint-style"),
+    (pane) => pane.handleInput?.("\x1b"),
+    (pane) => pane.handleInput?.("\x1b"),
+  ]);
+  await showSettingsMenu({} as ExtensionAPI, script.ctx, configuredSettings, "ctrl+alt+z");
+  script.assertFinished();
+
+  const saved = (await readSettings()).settings?.backend;
+  assert.equal(saved?.type, "openai-asr");
+  assert.equal(saved && "endpointStyle" in saved ? saved.endpointStyle : undefined, "transcriptions");
+});

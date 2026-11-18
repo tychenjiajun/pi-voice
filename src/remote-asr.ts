@@ -1,7 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Input, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { VoiceKeys } from "./keybindings.js";
-import type { BackendSettings } from "./settings.js";
+import {
+  asrEndpointStyle,
+  type AsrEndpointStyle,
+  type BackendSettings,
+  type RemoteBackendSettings,
+} from "./settings.js";
 import {
   LIST_PADDING,
   panelBorder,
@@ -10,6 +15,47 @@ import {
 } from "./ui-components.js";
 
 export type BackendType = "transcribe-cpp" | "openai-asr";
+
+/** Human label for a request style, shared by the settings rows and prompts. */
+export function endpointStyleSummary(style: AsrEndpointStyle): string {
+  return style === "transcriptions" ? "Transcriptions upload" : "Chat completions";
+}
+
+/**
+ * Pick how a remote endpoint is called. Two OpenAI-compatible dialects exist
+ * and servers usually implement only one: dedicated ASR models answer on
+ * `/audio/transcriptions`, audio-capable chat models on `/chat/completions`.
+ */
+export async function chooseEndpointStyle(
+  ctx: ExtensionContext,
+  current: AsrEndpointStyle,
+): Promise<AsrEndpointStyle | undefined> {
+  const choices: SingleSelectChoice<AsrEndpointStyle>[] = [
+    {
+      value: "chat",
+      label: endpointStyleSummary("chat"),
+      description:
+        "POST /chat/completions with the audio in an input_audio block; for audio-capable chat models such as gpt-4o-audio-preview",
+    },
+    {
+      value: "transcriptions",
+      label: endpointStyleSummary("transcriptions"),
+      description:
+        "POST /audio/transcriptions as a multipart upload; for dedicated ASR models such as whisper-1 or whisper.cpp servers",
+    },
+  ];
+  return ctx.ui.custom<AsrEndpointStyle | undefined>((tui, theme, keybindings, done) =>
+    new SingleSelectPicker(
+      tui,
+      theme,
+      keybindings,
+      choices,
+      current,
+      { title: "ASR request style", cancelLabel: "back" },
+      done,
+    ),
+  );
+}
 
 /** Pick the transcription backend; shared by first-run setup and the settings menu. */
 export async function chooseBackendType(
@@ -26,7 +72,7 @@ export async function chooseBackendType(
       value: "openai-asr",
       label: "Remote ASR (OpenAI-compatible)",
       description:
-        "Upload audio to any OpenAI-compatible chat-completions ASR endpoint; no local model is used",
+        "Upload audio to any OpenAI-compatible ASR endpoint (chat-completions or transcriptions); no local model is used",
     },
   ];
   return ctx.ui.custom<BackendType | undefined>((tui, theme, keybindings, done) =>
@@ -63,14 +109,12 @@ function validateEnvName(value: string): string | undefined {
   return undefined;
 }
 
-function remoteBackendsEqual(
-  left: Extract<BackendSettings, { type: "openai-asr" }>,
-  right: Extract<BackendSettings, { type: "openai-asr" }>,
-): boolean {
+function remoteBackendsEqual(left: RemoteBackendSettings, right: RemoteBackendSettings): boolean {
   return (
     left.baseUrl === right.baseUrl &&
     left.model === right.model &&
-    left.apiKeyEnv === right.apiKeyEnv
+    left.apiKeyEnv === right.apiKeyEnv &&
+    asrEndpointStyle(left) === asrEndpointStyle(right)
   );
 }
 
@@ -171,17 +215,25 @@ function promptText(
 }
 
 /**
- * Collect base URL, model, and API key env var for an OpenAI-compatible ASR
- * endpoint. Returns undefined if the user backs out of any field. `current`
- * pre-fills the prompts when editing an existing backend.
+ * Collect the request style, base URL, model, and API key env var for an
+ * OpenAI-compatible ASR endpoint. Returns undefined if the user backs out of
+ * any field. `current` pre-fills the prompts when editing an existing backend.
  */
 export async function promptRemoteBackend(
   ctx: ExtensionContext,
-  current?: Extract<BackendSettings, { type: "openai-asr" }>,
-): Promise<Extract<BackendSettings, { type: "openai-asr" }> | undefined> {
+  current?: RemoteBackendSettings,
+): Promise<RemoteBackendSettings | undefined> {
+  // No backend yet: the chat dialect stays the default, as it was before the
+  // transcriptions style existed.
+  const style = await chooseEndpointStyle(ctx, current ? asrEndpointStyle(current) : "chat");
+  if (style === undefined) return undefined;
+
   const baseUrl = await promptText(ctx, {
     title: "ASR base URL",
-    description: "OpenAI-compatible endpoint root, without the /chat/completions path",
+    description:
+      style === "transcriptions"
+        ? "Endpoint root, without the /audio/transcriptions path"
+        : "Endpoint root, without the /chat/completions path",
     value: current?.baseUrl ?? "",
     placeholder: "https://api.example.com/v1",
     validate: validateBaseUrl,
@@ -206,7 +258,13 @@ export async function promptRemoteBackend(
   });
   if (apiKeyEnv === undefined) return undefined;
 
-  const backend = { type: "openai-asr" as const, baseUrl, model, apiKeyEnv };
+  const backend = {
+    type: "openai-asr" as const,
+    baseUrl,
+    model,
+    apiKeyEnv,
+    ...(style === "transcriptions" ? { endpointStyle: style } : {}),
+  };
   if (current && remoteBackendsEqual(current, backend)) return undefined;
   return backend;
 }

@@ -20,14 +20,31 @@ export const DEFAULT_MICROPHONE: MicrophoneSetting = { type: "system-default" };
 export type ChineseOutput = "simplified" | "traditional-taiwan" | "traditional-hong-kong";
 
 /**
+ * How a remote endpoint is asked for a transcript. `chat` posts the recording
+ * as an `input_audio` content block on `/chat/completions`, which audio-capable
+ * chat models accept; `transcriptions` uploads WAV to `/audio/transcriptions`,
+ * which dedicated ASR servers (whisper-1, whisper.cpp servers, …) expose.
+ * Absent means `chat`, so settings written before this option existed behave
+ * exactly as before.
+ */
+export type AsrEndpointStyle = "chat" | "transcriptions";
+
+/**
  * Where recordings are transcribed. `transcribe-cpp` runs a local catalog
- * model; `openai-asr` uploads to any OpenAI-compatible chat-completions ASR
- * endpoint via the `input_audio` content block. The two are exclusive: remote
- * mode stores no local model, and local mode has no remote configuration.
+ * model; `openai-asr` uploads to any OpenAI-compatible ASR endpoint in one of
+ * the two request styles above. The two are exclusive: remote mode stores no
+ * local model, and local mode has no remote configuration.
  */
 export type BackendSettings =
   | { type: "transcribe-cpp" }
-  | { type: "openai-asr"; baseUrl: string; model: string; apiKeyEnv: string };
+  | {
+      type: "openai-asr";
+      baseUrl: string;
+      model: string;
+      apiKeyEnv: string;
+      /** Optional request style; absent means `chat` (backward compatible). */
+      endpointStyle?: AsrEndpointStyle;
+    };
 
 /**
  * Explicit model for post-processing, resolved through Pi's model registry and
@@ -145,6 +162,24 @@ export function transcriptionLanguageForModel(
   return defaultTranscriptionLanguage(model, preferredLanguages);
 }
 
+/** The persisted shape of a remote endpoint, with the request style optional. */
+export type RemoteBackendSettings = Extract<BackendSettings, { type: "openai-asr" }>;
+
+/**
+ * Canonical remote backend form: the default request style is left out of the
+ * file, so a chat-completions setup written before this option round-trips
+ * unchanged and every writer produces the same bytes.
+ */
+export function canonicalRemoteBackend(backend: RemoteBackendSettings): RemoteBackendSettings {
+  const { endpointStyle, ...rest } = backend;
+  return endpointStyle === "transcriptions" ? { ...rest, endpointStyle } : rest;
+}
+
+/** The effective remote request style; settings predating the option mean `chat`. */
+export function asrEndpointStyle(backend: RemoteBackendSettings): AsrEndpointStyle {
+  return backend.endpointStyle ?? "chat";
+}
+
 function validateBackend(value: unknown): BackendSettings | undefined {
   if (!isObject(value)) return undefined;
   if (value.type === "transcribe-cpp") return { type: "transcribe-cpp" };
@@ -160,12 +195,17 @@ function validateBackend(value: unknown): BackendSettings | undefined {
     ) {
       return undefined;
     }
-    return {
+    // An unknown style is no reason to drop the whole configuration; it falls
+    // back to the default, which canonicalRemoteBackend leaves unstored.
+    return canonicalRemoteBackend({
       type: "openai-asr",
       baseUrl: value.baseUrl.trim(),
       model: value.model.trim(),
       apiKeyEnv: value.apiKeyEnv.trim(),
-    };
+      ...(value.endpointStyle === "transcriptions"
+        ? { endpointStyle: "transcriptions" as const }
+        : {}),
+    });
   }
   return undefined;
 }
@@ -365,7 +405,7 @@ export function settingsForModel(
 
 
 type RemoteSettingsOptions = Omit<ModelSettingsOptions, "backend"> & {
-  backend: Extract<BackendSettings, { type: "openai-asr" }>;
+  backend: RemoteBackendSettings;
 };
 
 /** Remote-only settings: no local model is stored, so the endpoint is the sole backend. */
@@ -375,7 +415,7 @@ export function settingsRemoteOnly(options: RemoteSettingsOptions): TranscribeSe
   ];
   return {
     version: SETTINGS_VERSION,
-    backend: options.backend,
+    backend: canonicalRemoteBackend(options.backend),
     shortcut: options.shortcut,
     preferredLanguages,
     // The endpoint detects the language itself; "auto" keeps the stored value

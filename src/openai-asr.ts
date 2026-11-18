@@ -2,17 +2,21 @@ import OpenAI from "openai";
 import { CAPTURE_SAMPLE_RATE } from "./audio-constants.js";
 import { containsChineseCharacters, convertChineseOutput, isChineseLanguage } from "./chinese.js";
 import { describeError, writeLog } from "./log.js";
-import type { BackendSettings, ChineseOutput } from "./settings.js";
+import {
+  asrEndpointStyle,
+  type ChineseOutput,
+  type RemoteBackendSettings,
+} from "./settings.js";
 import type {
   DictationStream,
   TranscriptionOptions,
 } from "./transcription.js";
 
-type OpenAIAsrSettings = Extract<BackendSettings, { type: "openai-asr" }>;
+type OpenAIAsrSettings = RemoteBackendSettings;
 
 export type AsrRequest = {
-  /** `data:audio/wav;base64,…` of the whole recording. */
-  dataUrl: string;
+  /** The whole recording as 16-bit mono WAV bytes. */
+  wav: Buffer;
 };
 
 /** Uploads the recording and returns the transcript text. Injectable for tests. */
@@ -24,6 +28,8 @@ export type AsrTransport = (
 const SAMPLE_RATE = CAPTURE_SAMPLE_RATE;
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_RETRIES = 1;
+/** Filename announced in the multipart upload; servers key the decoder on content, not name. */
+const UPLOAD_FILENAME = "recording.wav";
 
 /** 16-bit mono PCM WAV from float samples in [-1, 1]. */
 export function encodeWav(pcm: Float32Array, sampleRate: number): Buffer {
@@ -49,8 +55,9 @@ export function encodeWav(pcm: Float32Array, sampleRate: number): Buffer {
   return buffer;
 }
 
-export function toDataUrl(pcm: Float32Array, sampleRate: number): string {
-  return `data:audio/wav;base64,${encodeWav(pcm, sampleRate).toString("base64")}`;
+/** Base64 data URL of a WAV buffer, the shape the chat dialect expects. */
+export function wavToDataUrl(wav: Buffer): string {
+  return `data:audio/wav;base64,${wav.toString("base64")}`;
 }
 
 /**
@@ -78,10 +85,51 @@ type ChatCompletionLike = {
   choices?: Array<{ message?: { content?: unknown } }>;
 };
 
-function createOpenAITransport(config: OpenAIAsrSettings): {
-  transport: AsrTransport;
-  dispose: () => void;
-} {
+/** Transcript text out of a response body, with the same empty check for both styles. */
+function requireTranscript(text: unknown): string {
+  if (typeof text !== "string" || !text.trim()) {
+    throw new Error("the ASR endpoint returned an empty transcript");
+  }
+  return text;
+}
+
+/**
+ * `chat` request style: the recording rides an `input_audio` block on
+ * `/chat/completions` as a base64 WAV data URL. Audio-capable chat models
+ * (OpenAI's `gpt-4o-audio-preview`, omni-style servers) answer this way.
+ */
+function chatTransport(client: OpenAI, model: string): AsrTransport {
+  return async (request, signal) => {
+    const completion = (await client.chat.completions.create(
+      buildChatBody(model, wavToDataUrl(request.wav)) as never,
+      { signal } as never,
+    )) as ChatCompletionLike;
+    return requireTranscript(completion.choices?.[0]?.message?.content);
+  };
+}
+
+/**
+ * `transcriptions` request style: multipart WAV upload to
+ * `/audio/transcriptions`. Dedicated ASR servers (OpenAI's `whisper-1`,
+ * whisper.cpp-based servers such as Lemonade) expose this route and reject
+ * `input_audio` chat requests, so the two styles are not interchangeable.
+ */
+function transcriptionsTransport(client: OpenAI, model: string): AsrTransport {
+  return async (request, signal) => {
+    // A copy into a plain ArrayBuffer: Blob parts reject a Node Buffer whose
+    // backing store may be a SharedArrayBuffer.
+    const file = new File([new Uint8Array(request.wav)], UPLOAD_FILENAME, {
+      type: "audio/wav",
+    });
+    const result = await client.audio.transcriptions.create({ file, model }, { signal });
+    // `json` responses carry { text }; a server answering with a bare text body
+    // lands as a string, so both shapes are accepted.
+    return requireTranscript(typeof result === "string" ? result : result?.text);
+  };
+}
+
+/** Build the transport for the configured request style. */
+export function createAsrTransport(config: OpenAIAsrSettings): AsrTransport {
   const apiKey = process.env[config.apiKeyEnv]?.trim();
   if (!apiKey) {
     throw new Error(
@@ -94,27 +142,15 @@ function createOpenAITransport(config: OpenAIAsrSettings): {
     timeout: REQUEST_TIMEOUT_MS,
     maxRetries: MAX_RETRIES,
   });
-  return {
-    transport: async (request, signal) => {
-      const body = buildChatBody(config.model, request.dataUrl);
-      const completion = (await client.chat.completions.create(
-        body as never,
-        { signal } as never,
-      )) as ChatCompletionLike;
-      const content = completion.choices?.[0]?.message?.content;
-      if (typeof content !== "string" || !content.trim()) {
-        throw new Error("the ASR endpoint returned an empty transcript");
-      }
-      return content;
-    },
-    // openai v7 is fetch-based and keeps no sockets open between requests.
-    dispose: () => undefined,
-  };
+  return asrEndpointStyle(config) === "transcriptions"
+    ? transcriptionsTransport(client, config.model)
+    : chatTransport(client, config.model);
 }
 
 /**
  * Trims, then applies the Chinese script preference exactly like the local
- * backend. The chat-completions response carries no detected language, so
+ * backend. Neither remote response style reports a detected language (a
+ * `transcriptions` reply is `{ text }` unless `verbose_json` is requested), so
  * Chinese is inferred from the text itself: Han characters mean the transcript
  * is Chinese and the preference applies, matching local models that detect it.
  */
@@ -140,7 +176,7 @@ export type OpenAIAsrBackendDeps = {
  * is no local fallback.
  */
 export class OpenAIAsrBackend {
-  private client: { transport: AsrTransport; dispose: () => void } | undefined;
+  private transport: AsrTransport | undefined;
   private disposed = false;
   private readonly injected: AsrTransport | undefined;
 
@@ -177,15 +213,13 @@ export class OpenAIAsrBackend {
         // any construction failure is reported like a request failure.
         // Success is cached; a failure is not, so a later call retries once
         // the env is fixed.
-        const client = this.client ?? createOpenAITransport(this.config);
-        this.client = client;
-        transport = client.transport;
+        this.transport ??= createAsrTransport(this.config);
+        transport = this.transport;
       }
       signal?.throwIfAborted();
-      const text = await transport(
-        { dataUrl: toDataUrl(pcm, SAMPLE_RATE) },
-        signal,
-      );
+      // Only the WAV bytes travel; the chat transport derives its data URL,
+      // so an upload-only backend never pays for the base64 copy.
+      const text = await transport({ wav: encodeWav(pcm, SAMPLE_RATE) }, signal);
       signal?.throwIfAborted();
       writeLog(
         "debug",
@@ -207,7 +241,8 @@ export class OpenAIAsrBackend {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    this.client?.dispose();
-    this.client = undefined;
+    // openai v7 is fetch-based and keeps no sockets open between requests, so
+    // dropping the reference is the whole teardown.
+    this.transport = undefined;
   }
 }

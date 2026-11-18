@@ -9,6 +9,7 @@ import {
   settingsForModel,
   settingsRemoteOnly,
   writeSettings,
+  type RemoteBackendSettings,
 } from "../src/settings.js";
 
 function isolatedSettings(t: TestContext) {
@@ -120,4 +121,50 @@ test("selecting a local model drops any remote configuration", () => {
   });
   assert.deepEqual(settings.backend, { type: "transcribe-cpp" });
   assert.equal(settings.model?.id, "parakeet-unified-en-0.6b");
+});
+
+test("the transcriptions request style round-trips", async (t) => {
+  isolatedSettings(t);
+  const settings = settingsRemoteOnly({
+    backend: { ...REMOTE_BACKEND, endpointStyle: "transcriptions" },
+    preferredLanguages: ["de", "en"],
+    shortcut: "ctrl+alt+x",
+  });
+  await writeSettings(settings);
+
+  const { settings: loaded, warning } = await readSettings();
+  assert.equal(warning, undefined);
+  assert.deepEqual(loaded?.backend, { ...REMOTE_BACKEND, endpointStyle: "transcriptions" });
+});
+
+test("the default request style is not stored, and settings predating it read as chat", async (t) => {
+  isolatedSettings(t);
+  // A writer that spells the default out still lands in the canonical shape,
+  // so a chat-completions setup looks exactly like it did before the option.
+  const settings = settingsRemoteOnly({
+    backend: { ...REMOTE_BACKEND, endpointStyle: "chat" },
+    preferredLanguages: ["en"],
+    shortcut: "ctrl+alt+x",
+  });
+  assert.deepEqual(settings.backend, REMOTE_BACKEND);
+
+  await writeSettings({ ...settings, backend: REMOTE_BACKEND });
+  const { settings: loaded } = await readSettings();
+  assert.deepEqual(loaded?.backend, REMOTE_BACKEND);
+});
+
+test("an unknown request style falls back to chat instead of invalidating settings", async (t) => {
+  isolatedSettings(t);
+  const settings = settingsRemoteOnly({
+    backend: REMOTE_BACKEND,
+    preferredLanguages: ["en"],
+    shortcut: "ctrl+alt+x",
+  });
+  // A hand-edited or future style value must not throw the config away.
+  const crafted = { ...REMOTE_BACKEND, endpointStyle: "grpc" } as unknown as RemoteBackendSettings;
+  await writeSettings({ ...settings, backend: crafted });
+
+  const { settings: loaded, warning } = await readSettings();
+  assert.equal(warning, undefined, "the endpoint configuration survives");
+  assert.deepEqual(loaded?.backend, REMOTE_BACKEND);
 });

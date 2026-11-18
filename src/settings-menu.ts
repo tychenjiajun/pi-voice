@@ -19,8 +19,16 @@ import {
   microphoneSummary,
 } from "./microphone-picker.js";
 import { runModelSelection } from "./onboarding.js";
-import { chooseBackendType, promptRemoteBackend, warnMissingApiKey } from "./remote-asr.js";
 import {
+  chooseBackendType,
+  chooseEndpointStyle,
+  endpointStyleSummary,
+  promptRemoteBackend,
+  warnMissingApiKey,
+} from "./remote-asr.js";
+import {
+  asrEndpointStyle,
+  canonicalRemoteBackend,
   MAX_POLISH_PROMPT_LENGTH,
   settingsWithPreferredLanguages,
   writeSettings,
@@ -50,6 +58,7 @@ export type SettingsAction =
   | "preferred-languages"
   | "model"
   | "backend"
+  | "endpoint-style"
   | "transcription-language"
   | "chinese-output"
   | "post-processing"
@@ -135,7 +144,9 @@ export function settingsHomeChoices(
 ): SettingsHomeChoice[] {
   // Local mode always carries a model; remote mode never does.
   const model = configured.model ? getCatalogModel(configured.model.id) : undefined;
-  const remote = configured.backend.type === "openai-asr";
+  const remoteBackend =
+    configured.backend.type === "openai-asr" ? configured.backend : undefined;
+  const remote = remoteBackend !== undefined;
   const choices: SettingsHomeChoice[] = [
     {
       value: "preferred-languages",
@@ -162,6 +173,19 @@ export function settingsHomeChoices(
       description:
         "Local model or remote ASR endpoint; the two modes are exclusive",
     },
+    // Only a remote endpoint has a request style to choose, and the row edits
+    // it without re-asking for base URL, model and key.
+    ...(remoteBackend
+      ? [
+          {
+            value: "endpoint-style" as const,
+            label: "ASR request style",
+            summary: endpointStyleSummary(asrEndpointStyle(remoteBackend)),
+            description:
+              "Chat completions (input_audio) or a multipart transcriptions upload; most servers implement one of the two",
+          },
+        ]
+      : []),
     {
       value: "post-processing",
       label: "Post-processing",
@@ -700,6 +724,23 @@ export async function showSettingsMenu(
 
     if (action === "backend") {
       await editBackend(ctx, configured);
+      continue;
+    }
+
+    if (action === "endpoint-style") {
+      if (configured.backend.type !== "openai-asr") continue;
+      const current = asrEndpointStyle(configured.backend);
+      const style = await chooseEndpointStyle(ctx, current);
+      if (!style || style === current) continue;
+      await saveUpdatedSettings(
+        ctx,
+        configured,
+        {
+          ...configured,
+          backend: canonicalRemoteBackend({ ...configured.backend, endpointStyle: style }),
+        },
+        `ASR request style: ${endpointStyleSummary(style)}`,
+      );
       continue;
     }
 

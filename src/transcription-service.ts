@@ -16,7 +16,7 @@ import {
   type AutoLanguagePolicy,
 } from "./language-detection-policy.js";
 import { describeError, log } from "./log.js";
-import type { TranscribeSettings } from "./settings.js";
+import { asrEndpointStyle, type TranscribeSettings } from "./settings.js";
 import type {
   DictationStream,
   TranscribeCppBackend,
@@ -105,8 +105,10 @@ function requireLocalModel(settings: TranscribeSettings): { path: string } {
 
 function backendKeyFor(settings: TranscribeSettings): string {
   if (settings.backend.type === "openai-asr") {
+    // The request style is part of the endpoint identity: the same URL and
+    // model name must not reuse a transport built for the other dialect.
     const { baseUrl, model } = settings.backend;
-    return `openai-asr:${baseUrl}|${model}`;
+    return `openai-asr:${baseUrl}|${model}|${asrEndpointStyle(settings.backend)}`;
   }
   return requireLocalModel(settings).path;
 }

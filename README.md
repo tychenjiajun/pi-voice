@@ -12,7 +12,7 @@ Press a keyboard shortcut, talk, and the resulting transcript will be put direct
 
 Browse more Pi packages in the [pi.dev packages gallery](https://pi.dev/packages/@tychenjiajun/pi-voice) and read the [Pi packages documentation](https://pi.dev/docs/latest/packages).
 
-> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible `input_audio` chat-completions endpoint) in an exclusive local-only or remote-only setup, plus compaction-style post-processing that refines a transcript with Pi's own model. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
+> **Fork notice.** `@tychenjiajun/pi-voice` is a fork of [`@earendil-works/pi-voice`](https://github.com/earendil-works/pi-voice) that adds a remote ASR backend (any OpenAI-compatible endpoint, in the `input_audio` chat-completions or `/audio/transcriptions` dialect) in an exclusive local-only or remote-only setup, plus compaction-style post-processing that refines a transcript with Pi's own model. It is published independently under a personal npm scope. See the [changelog](#changelog) for what changed.
 
 ## Install
 
@@ -41,13 +41,35 @@ The extension registers:
 
 ## Remote ASR (OpenAI-compatible endpoint)
 
-Pi Voice can send audio to a remote ASR service instead of transcribing with the local model. It speaks the OpenAI chat-completions `input_audio` dialect: the recording is uploaded as a base64 WAV data URL and the transcript is read from `choices[0].message.content`. Any endpoint that accepts that shape works.
+Pi Voice can send audio to a remote ASR service instead of transcribing with the local model. It speaks both OpenAI-compatible dialects, and you pick which one your endpoint implements:
+
+| Request style | Route | Sent as | For |
+| --- | --- | --- | --- |
+| **Chat completions** (default) | `POST {baseUrl}/chat/completions` | base64 WAV data URL in an `input_audio` content block; transcript read from `choices[0].message.content` | audio-capable chat models such as `gpt-4o-audio-preview` |
+| **Transcriptions upload** | `POST {baseUrl}/audio/transcriptions` | multipart WAV upload; transcript read from `text` | dedicated ASR models such as `whisper-1` and whisper.cpp-based servers |
+
+The two are not interchangeable: a dedicated ASR model rejects `input_audio` chat requests (typically `400 … does not support chat completion`), and a chat model has no `/audio/transcriptions` route. If a working setup suddenly reports one of those errors, switch the style.
 
 Set it up either during first-run setup — `/voice-settings` starts by asking **Local model** or **Remote ASR (OpenAI-compatible)** — or later in `/voice-settings` → **Transcription backend** → **Remote ASR (OpenAI-compatible)**. You are asked for:
 
-1. **Base URL** — endpoint root, without `/chat/completions`;
-2. **Model** — the model name your endpoint expects;
-3. **API key environment variable** — the *name* of an env var. The key itself is read from that variable at runtime and never written to settings.
+1. **ASR request style** — **Chat completions** or **Transcriptions upload**;
+2. **Base URL** — endpoint root, without `/chat/completions` or `/audio/transcriptions`;
+3. **Model** — the model name your endpoint expects;
+4. **API key environment variable** — the *name* of an env var. The key itself is read from that variable at runtime and never written to settings.
+
+The style can be changed later without retyping the rest, in `/voice-settings` → **ASR request style**. It is stored as `backend.endpointStyle` in `settings.json` and left out while **Chat completions** is active, so existing files are unchanged:
+
+```json
+{
+  "backend": {
+    "type": "openai-asr",
+    "baseUrl": "https://asr.example.com/v1",
+    "model": "whisper-1",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "endpointStyle": "transcriptions"
+  }
+}
+```
 
 Then export the key before starting Pi:
 
@@ -59,11 +81,11 @@ Behavior:
 
 - **Remote-only mode.** Remote settings store no local model: setup skips the model download step, and a failed remote request (network, quota, HTTP error, or an unset API key) surfaces as an error instead of being retried offline. Failures are logged to `~/.pi/agent/pi-voice.log`.
 - **Batch-only.** Remote transcription happens when recording stops (the ASR request carries the whole clip), so there is no streaming preview.
-- **16 kHz mono WAV** is uploaded as a base64 WAV data URL.
+- **16 kHz mono WAV** is uploaded in either style — as a base64 data URL for chat completions, as a multipart file for the transcriptions upload.
 - **Exclusive modes.** Switching **Transcription backend** to **Local model** asks you to pick a model first; switching to **Remote ASR** drops the local model from settings. The **Model** and **Transcription language** settings rows appear only in local mode.
 - `transcribe_file` uses whichever mode is configured — in remote mode the file audio is sent to the endpoint instead of a local model.
 
-Transcripts still go through the **Chinese output** script conversion preference; because a remote response carries no detected language, Han characters in the transcript are what trigger the conversion when the language is set to automatic. The **Chinese output** row stays reachable in remote mode, since the endpoint can always produce Chinese.
+Transcripts still go through the **Chinese output** script conversion preference; because neither remote response style reports a detected language, Han characters in the transcript are what trigger the conversion when the language is set to automatic. The **Chinese output** row stays reachable in remote mode, since the endpoint can always produce Chinese.
 
 ## Post-processing (compaction-style refinement)
 
@@ -129,7 +151,7 @@ When FFmpeg is unavailable, `transcribe_file` reports platform-specific guidance
 
 ### What models does it support?
 
-Local mode downloads GGUF ASR models from a built-in catalog — Whisper (e.g. `whisper-medium`), Parakeet, Canary, Nemotron, Qwen3-ASR and more, picked via a fuzzy-searchable `/voice-settings` model picker. Remote mode works with **any** endpoint that speaks the OpenAI chat-completions `input_audio` dialect (OpenAI, Groq, self-hosted servers, …).
+Local mode downloads GGUF ASR models from a built-in catalog — Whisper (e.g. `whisper-medium`), Parakeet, Canary, Nemotron, Qwen3-ASR and more, picked via a fuzzy-searchable `/voice-settings` model picker. Remote mode works with **any** endpoint that speaks one of the two OpenAI-compatible dialects — the chat-completions `input_audio` block or a `/audio/transcriptions` upload (OpenAI, Groq, self-hosted whisper.cpp servers, …).
 
 ### Does audio leave my machine?
 
@@ -144,6 +166,14 @@ This fork adds a remote ASR backend (exclusive local-only or remote-only setup) 
 Only for the `transcribe_file` tool (transcribing existing audio/video files). Microphone dictation works without it. Install hints for macOS, Debian/Ubuntu and Windows are in [File transcription and FFmpeg](#file-transcription-and-ffmpeg).
 
 ## Changelog
+
+### Unreleased
+
+**Added — Remote ASR request style (`transcriptions` uploads)**
+
+- Remote mode now speaks both OpenAI-compatible dialects: **Chat completions** (the existing `input_audio` block on `/chat/completions`) and **Transcriptions upload** (multipart WAV on `/audio/transcriptions`). Dedicated ASR servers such as `whisper-1` or whisper.cpp-based endpoints implement only the latter and previously failed with `400 This model does not support chat completion`.
+- First-run setup and **Transcription backend** → **Remote ASR** ask for the request style before the base URL; `/voice-settings` → **ASR request style** changes it on its own, in remote mode only.
+- Stored as `backend.endpointStyle` in `settings.json`. The default `chat` is not written, so existing settings files are unchanged and keep transcribing over chat completions; an unknown value falls back to `chat` instead of invalidating the configuration. The cached remote backend keys on the style, so switching dialects takes effect without a restart.
 
 ### 0.9.0
 

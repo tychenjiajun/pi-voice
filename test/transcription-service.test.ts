@@ -493,7 +493,7 @@ test("an empty recording never reaches stream finalize", async () => {
   await service.shutdown();
 });
 
-function remoteSettings(): TranscribeSettings {
+function remoteSettings(style?: "chat" | "transcriptions"): TranscribeSettings {
   // Remote-only settings never carry a local model.
   const { model: _model, ...base } = settings("model-a");
   return {
@@ -503,6 +503,7 @@ function remoteSettings(): TranscribeSettings {
       baseUrl: "https://example.com/v1",
       model: "asr-model",
       apiKeyEnv: "PI_VOICE_TEST_KEY",
+      ...(style ? { endpointStyle: style } : {}),
     },
   };
 }
@@ -530,13 +531,17 @@ test("the factory receives the full settings and backends key on endpoint identi
     service.transcribeFile(settings("model-a"), pcm(1)),
     service.transcribeFile(remoteSettings(), pcm(2)),
     service.transcribeFile(remoteSettings(), pcm(3)),
+    // Same URL and model, other request style: a chat transport cannot serve a
+    // transcriptions endpoint, so it must not reuse the cached backend.
+    service.transcribeFile(remoteSettings("transcriptions"), pcm(4)),
   ]);
-  assert.deepEqual(results.map((result) => result.text), ["1", "2", "3"]);
+  assert.deepEqual(results.map((result) => result.text), ["1", "2", "3", "4"]);
 
   assert.equal(keys[0], "model-a");
-  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|asr-model$/);
-  assert.equal(keys.length, 2, "identical remote settings reuse the backend");
-  assert.deepEqual(backendTypes, ["transcribe-cpp", "openai-asr"]);
+  assert.match(keys[1]!, /^openai-asr:https:\/\/example\.com\/v1\|asr-model\|chat$/);
+  assert.match(keys[2]!, /^openai-asr:https:\/\/example\.com\/v1\|asr-model\|transcriptions$/);
+  assert.equal(keys.length, 3, "identical remote settings reuse one backend per style");
+  assert.deepEqual(backendTypes, ["transcribe-cpp", "openai-asr", "openai-asr"]);
   await service.shutdown();
 });
 

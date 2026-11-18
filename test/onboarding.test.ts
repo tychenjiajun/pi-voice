@@ -285,6 +285,8 @@ test("choosing Remote ASR in first-run setup is remote-only with no local model"
       assert.ok(pane instanceof SingleSelectPicker);
       done("remote");
     },
+    // The request style comes first; the chat dialect is the default.
+    (_pane, done) => done("chat"),
     (_pane, done) => done("https://asr.example.com/v1"),
     (_pane, done) => done("whisper-test"),
     (_pane, done) => done(apiKeyEnv),
@@ -303,7 +305,7 @@ test("choosing Remote ASR in first-run setup is remote-only with no local model"
     baseUrl: "https://asr.example.com/v1",
     model: "whisper-test",
     apiKeyEnv,
-  });
+  }, "the default style is not stored, so files keep the pre-option shape");
   assert.equal(configured.model, undefined, "remote mode stores no local model");
   assert.deepEqual((await readSettings()).settings, configured);
 });
