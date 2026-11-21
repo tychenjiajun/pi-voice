@@ -297,7 +297,7 @@ export class LanguagePicker extends Container implements Focusable {
   // The pane replaces the host editor and cannot scroll: when the terminal is
   // short, shrink the window so the title, Continue row, and footer stay on
   // screen.
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     const budget = paneRowBudget(this.tui);
     if (budget !== undefined) {
       const chrome = super.render(width).length - this.list.render(width).length;
@@ -629,7 +629,7 @@ export class CatalogModelPicker extends Container implements Focusable {
   // Short terminals also shrink the list window so the title, Languages line,
   // detail, and footer stay on screen; the downloading panel is short enough
   // to be exempt.
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     if (this.ratingsHelp.isOpen) return this.ratingsHelp.render(width);
     if (width !== this.renderWidth) {
       this.renderWidth = width;

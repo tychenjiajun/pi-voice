@@ -392,7 +392,7 @@ export class RecommendedModelPicker extends Container implements Focusable {
     return downloadAction(model, this.selection.cachedById.has(model.id));
   }
 
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     const lines = super.render(width);
     const budget = Math.max(1, paneRowBudget(this.tui) ?? Infinity);
     if (lines.length <= budget) return lines;

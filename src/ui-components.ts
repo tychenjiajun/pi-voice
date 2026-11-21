@@ -355,7 +355,7 @@ export class SingleSelectPicker<T extends string> extends Container implements F
 
   // The pane replaces the host editor and cannot scroll: when the terminal
   // is short, shrink the list window so the title and footer stay on screen.
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     if (width !== this.renderWidth) {
       this.renderWidth = width;
       this.refresh();
